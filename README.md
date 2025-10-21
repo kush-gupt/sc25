@@ -2,6 +2,8 @@
 
 Kubernetes-native HPC platform combining traditional (Slurm) and modern (Flux) batch schedulers with Model Context Protocol (MCP) servers for seamless LLM integration. Run HPC workloads with AI-assisted workflows in local development environments.
 
+Assisted by: Cursor IDE
+
 ## Features
 
 - Slurm (via Slinky) and Flux operator deployments
@@ -76,7 +78,7 @@ MIT License - see [LICENSE](LICENSE)
 
 ## References & Acknowledgments
 
-This project leverages several open-source technologies:
+This project leverages several AMAZING open-source technologies:
 - [Podman](https://docs.podman.io/)
 - [Slurm Workload Manager](https://www.schedmd.com/slurm.html) - Traditional HPC scheduler
 - [Flux Framework](https://flux-framework.org/) - Next-generation HPC scheduler
