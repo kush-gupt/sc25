@@ -1,0 +1,13 @@
+FROM quay.io/centos/centos:stream9
+
+RUN dnf install -y podman fuse-overlayfs slirp4netns bc hostname && dnf clean all
+
+RUN mkdir -p /etc/containers && \
+    echo -e "[storage]\ndriver = \"overlay\"\n[storage.options.overlay]\nmount_program = \"/usr/bin/fuse-overlayfs\"" > /etc/containers/storage.conf
+
+COPY *.sh /workloads/
+RUN chmod +x /workloads/*.sh
+
+WORKDIR /workloads
+CMD ["/bin/bash"]
+

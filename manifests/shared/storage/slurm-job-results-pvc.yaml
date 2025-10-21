@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: slurm-job-results
+  namespace: slurm
+  labels:
+    app.kubernetes.io/part-of: hpc-mcp
+    storage-type: shared-results
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  # For kind cluster, this will use local-path provisioner
+  # In production, use your preferred shared storage
+

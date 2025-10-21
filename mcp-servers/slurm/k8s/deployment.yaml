@@ -1,0 +1,135 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: slurm-mcp-server
+  namespace: slurm
+  labels:
+    app: slurm-mcp-server
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5000
+      targetPort: 5000
+      protocol: TCP
+      name: mcp
+  selector:
+    app: slurm-mcp-server
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: slurm-mcp-server
+  namespace: slurm
+  labels:
+    app: slurm-mcp-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: slurm-mcp-server
+  template:
+    metadata:
+      labels:
+        app: slurm-mcp-server
+    spec:
+      containers:
+      - name: slurm-mcp-server
+        image: localhost/slurm-mcp-server:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5000
+          name: mcp
+          protocol: TCP
+        env:
+        - name: SLURM_REST_URL
+          value: "http://slurm-restapi.slurm.svc.cluster.local:6820"
+        - name: SLURM_USER
+          value: "slurm"
+        - name: SLURM_NAMESPACE
+          value: "slurm"
+        - name: MCP_PORT
+          value: "5000"
+        - name: MCP_HOST
+          value: "0.0.0.0"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+        volumeMounts:
+        - name: kube-api-access
+          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          readOnly: true
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      serviceAccountName: slurm-mcp-sa
+      volumes:
+      - name: kube-api-access
+        projected:
+          sources:
+          - serviceAccountToken:
+              expirationSeconds: 3607
+              path: token
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+              - key: ca.crt
+                path: ca.crt
+          - downwardAPI:
+              items:
+              - path: namespace
+                fieldRef:
+                  fieldPath: metadata.namespace
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: slurm-mcp-sa
+  namespace: slurm
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: slurm-mcp-role
+  namespace: slurm
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/exec"]
+  verbs: ["get", "list", "create"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: slurm-mcp-rolebinding
+  namespace: slurm
+subjects:
+- kind: ServiceAccount
+  name: slurm-mcp-sa
+  namespace: slurm
+roleRef:
+  kind: Role
+  name: slurm-mcp-role
+  apiGroup: rbac.authorization.k8s.io
+

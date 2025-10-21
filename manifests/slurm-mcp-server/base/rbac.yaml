@@ -1,0 +1,36 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: slurm-mcp-role
+  namespace: slurm
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/exec"]
+  verbs: ["get", "list", "create", "delete"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
+- apiGroups: ["slinky.slurm.net"]
+  resources: ["controllers", "nodesets", "loginsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: slurm-mcp-rolebinding
+  namespace: slurm
+subjects:
+- kind: ServiceAccount
+  name: slurm-mcp-sa
+  namespace: slurm
+roleRef:
+  kind: Role
+  name: slurm-mcp-role
+  apiGroup: rbac.authorization.k8s.io
+

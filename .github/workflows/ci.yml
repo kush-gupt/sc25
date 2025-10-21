@@ -1,0 +1,182 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}
+
+jobs:
+  build-and-test:
+    name: Build Images and Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Slurm MCP
+        uses: docker/build-push-action@v5
+        with:
+          context: mcp-servers/slurm
+          file: mcp-servers/slurm/Containerfile
+          push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/slurm-mcp-server:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Flux MCP
+        uses: docker/build-push-action@v5
+        with:
+          context: mcp-servers/flux
+          file: mcp-servers/flux/Containerfile
+          push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/flux-mcp-server:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Workload
+        uses: docker/build-push-action@v5
+        with:
+          context: workloads
+          file: workloads/Containerfile
+          push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/sc25-workload:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Test build script
+        run: |
+          cd mcp-servers
+          chmod +x build.sh
+          BUILDER=podman TAG=test ./build.sh
+
+      - name: Lint shell scripts
+        run: |
+          sudo apt-get install -y shellcheck
+          find . -name "*.sh" -type f ! -path "./.*" | while read -r script; do
+            shellcheck -x "$script" || true
+          done
+
+  test-flux:
+    name: Test Cluster Setup
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          sudo docker image prune -af
+
+      - name: Install dependencies
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+          chmod +x ./kind && sudo mv ./kind /usr/local/bin/
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Run setup script (Flux only)
+        run: |
+          cd bootstrap
+          chmod +x setup_local_cluster.sh
+          INSTALL_SLURM=false INSTALL_FLUX=true ENABLE_ACCOUNTING=false \
+            timeout 15m ./setup_local_cluster.sh
+
+      - name: Verify deployment
+        run: |
+          kubectl get pods --all-namespaces
+          kubectl get applications -n argocd
+          kubectl wait --for=condition=Available --timeout=300s deployment/operator-controller-manager -n operator-system
+          kubectl get crd miniclusters.flux-framework.org
+
+      - name: Run Flux demo
+        run: |
+          cd bootstrap/demo
+          chmod +x demo_flux_jobs.sh demo_lib.sh
+          USE_OCI_ARTIFACTS=false timeout 10m ./demo_flux_jobs.sh
+
+      - name: Verify jobs ran
+        run: |
+          POD=$(kubectl get pods -n flux-operator -l job-name=flux-sample -o jsonpath='{.items[0].metadata.name}')
+          kubectl exec -n flux-operator $POD -c flux-sample -- \
+            bash -c 'FLUX_URI=local:///mnt/flux/view/run/flux/local flux jobs -a'
+
+  test-slurm:
+    name: Test Slurm Setup
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          sudo docker image prune -af
+
+      - name: Install dependencies
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+          chmod +x ./kind && sudo mv ./kind /usr/local/bin/
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Generate SSH key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "ci-test"
+
+      - name: Run setup script (Slurm only)
+        run: |
+          cd bootstrap
+          chmod +x setup_local_cluster.sh
+          INSTALL_SLURM=true INSTALL_FLUX=false ENABLE_ACCOUNTING=false \
+            ENABLE_ROOT_SSH=true ENABLE_SSSD=false \
+            timeout 20m ./setup_local_cluster.sh
+
+      - name: Verify Slurm deployment
+        run: |
+          kubectl get pods -n slurm
+          kubectl get crd | grep slinky
+          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/component=slurmctld -n slurm --timeout=300s
+          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/component=login -n slurm --timeout=300s
+
+      - name: Test Slurm functionality
+        run: |
+          kubectl exec -n slurm -l app.kubernetes.io/component=login -- sinfo
+          kubectl exec -n slurm -l app.kubernetes.io/component=login -- srun hostname
+
+      - name: Run Slurm demo
+        run: |
+          cd bootstrap/demo
+          chmod +x demo_slurm_jobs.sh demo_lib.sh
+          USE_OCI_ARTIFACTS=true timeout 10m ./demo_slurm_jobs.sh

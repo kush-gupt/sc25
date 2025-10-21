@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# API Keys and Secrets
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+secrets/
+*.secret
+.kube/config
+kubeconfig*
+
+# SSH keys
+id_rsa
+id_ed25519
+*.ppk
+
+# Container build artifacts
+*.tar
+*.tar.gz
+*.tar.bz2
+*.tgz
+
+# Job outputs
+*.out
+*.err
+*.log
+slurm-*.out
+flux_job_*.out
+job_*.out
+job_*.err
+
+# OS files
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+
