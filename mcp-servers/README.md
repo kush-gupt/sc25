@@ -1,120 +1,109 @@
-# MCP Servers for HPC Workload Managers
+# Unified HPC MCP Server
 
-Model Context Protocol servers for Slurm and Flux, enabling LLM integration with HPC schedulers.
+Single Model Context Protocol (MCP) server that brokers both Slurm REST (`slurmrestd`) and Flux Operator MiniClusters. The runtime and client scaffolding follow the [rdwj/mcp-server-template](https://github.com/rdwj/mcp-server-template) and [rdwj/mcp-client-template](https://github.com/rdwj/mcp-client-template), while Flux MiniCluster specs are validated against the upstream [Flux Operator CRD](https://flux-framework.org/flux-operator/getting_started/custom-resource-definition.html#v1alpha1).
 
-## Overview
+## Security-first Overview
 
-Two MCP servers that run as pods in Kubernetes:
-- **Slurm MCP**: Interacts via REST API (slurmrestd)
-- **Flux MCP**: Interacts via Kubernetes API
+- One hardened container image (`hpc-mcp-server`) with FastMCP HTTP transport.
+- Flux MiniCluster CRUD enforces namespace allow-lists, spec validation, and readiness waits without leaking pod details.
+- Slurm interactions remain REST-only; Kubernetes RBAC is scoped to `miniclusters` + read-only Pods.
+- Network traffic stays on port `5000` with `/health` for probes.
 
 ## Prerequisites
 
-```bash
-# Setup local cluster with Slurm/Flux
-../bootstrap/setup_local_cluster.sh
-```
-
-Requirements: Podman, Python 3.12+
+- Podman or Docker, Python 3.12+, `kind`, `kubectl`, `jq` (for the test script).
+- A running demo cluster from `../bootstrap/setup_local_cluster.sh` (deploys Slurm + Flux operators).
 
 ## Quick Start
 
 ```bash
-# Build and deploy
+# Build + deploy into kind (uses localhost/hpc-mcp-server:latest by default)
+cd mcp-servers
 ./build_and_deploy.sh
 
 # Verify
-kubectl get pods -n slurm -l app=slurm-mcp-server
-kubectl get pods -n flux-operator -l app=flux-mcp-server
+kubectl get pods -n hpc-mcp -l app=hpc-mcp-server
+kubectl get svc -n hpc-mcp hpc-mcp-server
 
-# Test
-cd ../tests && ./integration_test.sh
+# Smoke test
+./tests/integration_test.sh
 ```
 
 ## Access
 
-**Port-forward for external access:**
 ```bash
-kubectl port-forward -n slurm svc/slurm-mcp-server 5000:5000
-kubectl port-forward -n flux-operator svc/flux-mcp-server 5001:5001
+kubectl port-forward -n hpc-mcp svc/hpc-mcp-server 5000:5000
 ```
 
-**Endpoints:**
-- Slurm: `http://localhost:5000/messages`
-- Flux: `http://localhost:5001/messages`
-- Health: `http://localhost:{5000,5001}/health`
+- MCP endpoint: `http://localhost:5000/messages`
+- Health: `http://localhost:5000/health`
 
-## Available Tools (20 total)
+## Tools (10 total)
 
-**Slurm (10):** submit_job, get_job, list_jobs, cancel_job, get_queue, get_nodes, submit_array, get_accounting, job_output, resource_info
-
-**Flux (10):** submit_job, get_job, list_jobs, cancel_job, get_queue, get_resources, job_attach, job_stats, submit_with_deps, bulk_submit
+| Scheduler | Tool | Purpose |
+|-----------|------|---------|
+| Slurm | `slurm_submit_job` | Secure script-based submission |
+| Slurm | `slurm_get_job` | Describe a job |
+| Slurm | `slurm_list_jobs` | Filter by state/user |
+| Slurm | `slurm_cancel_job` | Cancel pending/running job |
+| Slurm | `slurm_queue_summary` | Summarize queue state |
+| Flux | `flux_list_miniclusters` | Enumerate MiniClusters in allowed namespaces |
+| Flux | `flux_get_minicluster` | Fetch CR + status |
+| Flux | `flux_apply_minicluster` | Create/update MiniCluster specs with validation |
+| Flux | `flux_scale_minicluster` | Patch size/maxSize |
+| Flux | `flux_delete_minicluster` | Secure deletion |
 
 ## Configuration
 
-**Slurm Environment:**
-- `SLURM_REST_URL`: http://slurm-restapi.slurm.svc.cluster.local:6820
-- `SLURM_USER`: slurm (auto-generates JWT tokens)
-- `SLURM_NAMESPACE`: slurm
-
-**Flux Environment:**
-- `FLUX_URI`: local:///mnt/flux/view/run/flux/local
-- `FLUX_NAMESPACE`: flux-operator
-- `FLUX_MINICLUSTER`: flux-sample
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_HOST` | `0.0.0.0` | Listener host |
+| `MCP_PORT` | `5000` | Listener port |
+| `MCP_TRANSPORT` | `http` | Transport type |
+| `SLURM_REST_URL` | `http://slurm-restapi.slurm.svc.cluster.local:6820` | slurmrestd endpoint |
+| `SLURM_NAMESPACE` | `slurm` | Namespace for token generation |
+| `SLURM_USER` | `slurm` | REST identity |
+| `FLUX_NAMESPACE` | `flux-operator` | Default MiniCluster namespace |
+| `FLUX_MINICLUSTER` | `flux-sample` | Default MiniCluster name |
+| `ALLOWED_NAMESPACES` | *(empty)* | Comma-separated allow-list for Flux namespaces |
 
 ## Client Configuration
 
-### Claude Desktop / Cursor
-
-Add to MCP config (`claude_desktop_config.json` or Cursor settings):
+Example Cursor/Claude MCP snippet:
 
 ```json
 {
   "mcpServers": {
-    "slurm-hpc": {
+    "hpc-mcp": {
       "url": "http://localhost:5000/messages",
-      "transport": "sse"
-    },
-    "flux-hpc": {
-      "url": "http://localhost:5001/messages",
       "transport": "sse"
     }
   }
 }
 ```
 
-Requires port-forwarding (see Access section above).
+You can scaffold custom clients using [rdwj/mcp-client-template](https://github.com/rdwj/mcp-client-template) to exercise the same tool surface securely.
+
+## Integration Test
+
+`tests/integration_test.sh` port-forwards the service, checks `/health`, and calls `tools/list`. Requires `jq` and an accessible cluster.
 
 ## Development
 
-**Build images:**
 ```bash
-./build.sh                    # Both servers
-./build.sh --slurm-only       # Slurm only
-./build.sh --flux-only        # Flux only
-```
+# Build
+./build.sh --registry localhost --tag latest
 
-**Load into kind:**
-```bash
-podman save localhost/slurm-mcp-server:latest | kind load image-archive /dev/stdin --name hpc-local
-podman save localhost/flux-mcp-server:latest | kind load image-archive /dev/stdin --name hpc-local
-```
+# Load into kind manually
+podman save localhost/hpc-mcp-server:latest | kind load image-archive /dev/stdin --name hpc-local
 
-**Push to registry:**
-```bash
+# Push to custom registry
 ./push.sh --registry quay.io/myorg --tag v1.0.0
 ```
 
 ## Troubleshooting
 
-**Connection errors:** Check services exist with `kubectl get svc -n {slurm,flux-operator}`
-
-**Auth errors:** JWT tokens auto-generate from slurm-controller-0 pod
-
-**RBAC errors:** Check with `kubectl get sa,role,rolebinding -n {slurm,flux-operator}`
-
-**Logs:** `kubectl logs -n {namespace} -l app={slurm,flux}-mcp-server`
-
-## References
-
-[MCP](https://modelcontextprotocol.io/) • [Slurm REST API](https://slurm.schedmd.com/rest.html) • [Flux](https://flux-framework.org/) • [Slinky](https://slinky.schedmd.com/) • [Flux Operator](https://github.com/flux-framework/flux-operator/)
+- **Pod pending**: `kubectl describe pod -n hpc-mcp -l app=hpc-mcp-server`
+- **Flux RBAC**: ensure ServiceAccount `hpc-mcp-sa` has verbs on `flux-framework.org/miniclusters`.
+- **Slurm token errors**: `kubectl logs slurm-controller-0 -n slurm -c slurmctld | grep token`
+- **Custom namespaces**: set `ALLOWED_NAMESPACES=flux-operator,flux-research` to allow multi-tenancy.

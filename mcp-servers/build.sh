@@ -1,85 +1,48 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REGISTRY="${REGISTRY:-localhost}"
 TAG="${TAG:-latest}"
 BUILDER="${BUILDER:-podman}"
+IMAGE_NAME=""
 
 usage() {
-    cat <<EOF
+    cat <<USAGE
 Usage: $0 [OPTIONS]
-Options:
-    -r, --registry REGISTRY    Registry (default: localhost)
-    -t, --tag TAG              Tag (default: latest)
-    -b, --builder BUILDER      podman or docker (default: podman)
-    -s, --slurm-only           Build Slurm only
-    -f, --flux-only            Build Flux only
-    -h, --help                 Show help
-EOF
+  -r, --registry REGISTRY    Target registry (default: localhost)
+  -t, --tag TAG              Image tag (default: latest)
+  -b, --builder BUILDER      Container builder (podman|docker)
+  -h, --help                 Show this help
+USAGE
     exit 0
 }
 
-BUILD_SLURM=true
-BUILD_FLUX=true
-
-# Parse arguments
 while [[ $# -gt 0 ]]; do
-    case $1 in
+    case "$1" in
         -r|--registry)
-            REGISTRY="$2"
-            shift 2
-            ;;
+            REGISTRY="$2"; shift 2 ;;
         -t|--tag)
-            TAG="$2"
-            shift 2
-            ;;
+            TAG="$2"; shift 2 ;;
         -b|--builder)
-            BUILDER="$2"
-            shift 2
-            ;;
-        -s|--slurm-only)
-            BUILD_SLURM=true
-            BUILD_FLUX=false
-            shift
-            ;;
-        -f|--flux-only)
-            BUILD_SLURM=false
-            BUILD_FLUX=true
-            shift
-            ;;
+            BUILDER="$2"; shift 2 ;;
         -h|--help)
-            usage
-            ;;
+            usage ;;
         *)
-            echo "Unknown option: $1"
-            usage
-            ;;
+            echo "Unknown option: $1" >&2
+            usage ;;
     esac
 done
 
-if ! command -v "$BUILDER" &> /dev/null; then
-    echo "Error: $BUILDER not found"
+IMAGE_NAME="${REGISTRY}/hpc-mcp-server:${TAG}"
+
+if ! command -v "$BUILDER" >/dev/null 2>&1; then
+    echo "Error: builder '$BUILDER' not found" >&2
     exit 1
 fi
 
-echo "Building MCP servers (registry: $REGISTRY, tag: $TAG)"
+pushd "${SCRIPT_DIR}/hpc_mcp_server" >/dev/null
+$BUILDER build -t "$IMAGE_NAME" -f Containerfile .
+popd >/dev/null
 
-if [ "$BUILD_SLURM" = true ]; then
-    echo "Building Slurm MCP Server..."
-    cd "${SCRIPT_DIR}/slurm"
-    $BUILDER build -t "${REGISTRY}/slurm-mcp-server:${TAG}" -f Containerfile .
-    cd "${SCRIPT_DIR}"
-fi
-
-if [ "$BUILD_FLUX" = true ]; then
-    echo "Building Flux MCP Server..."
-    cd "${SCRIPT_DIR}/flux"
-    $BUILDER build -t "${REGISTRY}/flux-mcp-server:${TAG}" -f Containerfile .
-    cd "${SCRIPT_DIR}"
-fi
-
-echo "Build complete!"
-[ "$BUILD_SLURM" = true ] && echo "  - ${REGISTRY}/slurm-mcp-server:${TAG}"
-[ "$BUILD_FLUX" = true ] && echo "  - ${REGISTRY}/flux-mcp-server:${TAG}"
-
+echo "Built $IMAGE_NAME"

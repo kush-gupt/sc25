@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: hpc-mcp-server
+  namespace: hpc-mcp
+  labels:
+    app: hpc-mcp-server
+spec:
+  selector:
+    app: hpc-mcp-server
+  ports:
+    - name: mcp
+      port: 5000
+      targetPort: 5000
+      protocol: TCP

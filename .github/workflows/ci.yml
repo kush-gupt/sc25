@@ -10,231 +10,141 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ${{ github.repository_owner }}
+  IMAGE_NAME: hpc-mcp-server
 
 jobs:
   build-and-test:
-    name: Build Images and Test
+    name: Build Unified Image and Run Tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    
+    env:
+      FULL_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ env.IMAGE_NAME }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build Slurm MCP
-        uses: docker/build-push-action@v5
-        with:
-          context: mcp-servers/slurm
-          file: mcp-servers/slurm/Containerfile
-          push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/slurm-mcp-server:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build Flux MCP
-        uses: docker/build-push-action@v5
-        with:
-          context: mcp-servers/flux
-          file: mcp-servers/flux/Containerfile
-          push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/flux-mcp-server:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build Workload
-        uses: docker/build-push-action@v5
-        with:
-          context: workloads
-          file: workloads/Containerfile
-          push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/sc25-workload:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Install podman
+      - name: Install Podman + tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y podman
+          sudo apt-get install -y podman python3-venv shellcheck
+          podman --version
+
+      - name: Build image
+        run: |
+          cd mcp-servers/hpc_mcp_server
+          podman build \
+            -t ${{ env.FULL_IMAGE }}:${{ github.sha }} \
+            -f Containerfile \
+            .
+
+      - name: Run Python tests
+        run: |
+          cd mcp-servers/hpc_mcp_server
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install -e . pytest
+          pytest -q
 
       - name: Test build script
         run: |
           cd mcp-servers
           chmod +x build.sh
-          BUILDER=podman TAG=test ./build.sh
+          REGISTRY=localhost TAG=test BUILDER=podman ./build.sh
+
+      - name: Log in to GHCR (Podman)
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | podman login ${{ env.REGISTRY }} --username "${{ github.actor }}" --password-stdin
+
+      - name: Push image (main only)
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: |
+          podman push ${{ env.FULL_IMAGE }}:${{ github.sha }}
+          podman tag ${{ env.FULL_IMAGE }}:${{ github.sha }} ${{ env.FULL_IMAGE }}:latest
+          podman push ${{ env.FULL_IMAGE }}:latest
 
       - name: Lint shell scripts
         run: |
-          sudo apt-get install -y shellcheck
           find . -name "*.sh" -type f ! -path "./.*" | while read -r script; do
             shellcheck -x "$script" || true
           done
 
-  test-flux:
-    name: Test Flux Setup
+  test-hpc-mcp:
+    name: End-to-End Cluster Test
+    needs: build-and-test
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: read
+    env:
+      CLUSTER_NAME: hpc-local
+      HPCMCP_NAMESPACE: hpc-mcp
+      KIND_EXPERIMENTAL_PROVIDER: podman
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
-          sudo docker image prune -af
-
       - name: Install dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y podman jq
           curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-amd64
           chmod +x ./kind && sudo mv ./kind /usr/local/bin/
           curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
           chmod +x kubectl && sudo mv kubectl /usr/local/bin/
           curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-      - name: Run setup script (Flux only)
+      - name: Disable docker CLI (prefer Podman)
+        run: |
+          if command -v docker >/dev/null 2>&1; then
+            sudo mv $(command -v docker) /usr/local/bin/docker.disabled
+          fi
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          podman system prune -af || true
+
+      - name: Bootstrap Slurm + Flux cluster
         run: |
           cd bootstrap
           chmod +x setup_local_cluster.sh
-          INSTALL_SLURM=false INSTALL_FLUX=true ENABLE_ACCOUNTING=false \
-            timeout 15m ./setup_local_cluster.sh
+          INSTALL_SLURM=true \
+          INSTALL_FLUX=true \
+          ENABLE_ACCOUNTING=false \
+          ENABLE_ROOT_SSH=false \
+          ENABLE_SSSD=false \
+          INSTALL_ARGOCD=true \
+          timeout 25m ./setup_local_cluster.sh
 
-      - name: Verify deployment
+      - name: Build image
+        run: |
+          cd mcp-servers/hpc_mcp_server
+          podman build -t localhost/hpc-mcp-server:latest -f Containerfile .
+
+      - name: Load image into kind
+        run: |
+          podman save -o /tmp/hpc-mcp-server.tar localhost/hpc-mcp-server:latest
+          kind load image-archive --name "${CLUSTER_NAME}" /tmp/hpc-mcp-server.tar
+
+      - name: Deploy MCP server overlay
+        run: |
+          kubectl apply -k manifests/hpc-mcp-server/overlays/local
+          kubectl wait --for=condition=Available deployment/hpc-mcp-server -n ${HPCMCP_NAMESPACE} --timeout=180s
+          kubectl wait --for=condition=Ready pod -l app=hpc-mcp-server -n ${HPCMCP_NAMESPACE} --timeout=180s
+
+      - name: Run integration test
+        run: |
+          chmod +x mcp-servers/tests/integration_test.sh
+          ./mcp-servers/tests/integration_test.sh
+
+      - name: Gather diagnostics on failure
+        if: failure()
         run: |
           kubectl get pods --all-namespaces
-          kubectl get applications -n argocd
-          kubectl wait --for=condition=Available --timeout=300s deployment/operator-controller-manager -n operator-system
-          kubectl get crd miniclusters.flux-framework.org
-
-      - name: Run Flux demo
-        run: |
-          cd bootstrap/demo
-          chmod +x demo_flux_jobs.sh demo_lib.sh
-          USE_OCI_ARTIFACTS=false ./demo_flux_jobs.sh || true
-
-      - name: Verify Flux basic functionality
-        run: |
-          # Wait for MiniCluster to be ready
-          kubectl wait --for=condition=Ready pod -l job-name=flux-sample -n flux-operator --timeout=120s || true
-          
-          # Check if pods exist
-          kubectl get pods -n flux-operator
-          
-          # Try to get Flux status
-          POD=$(kubectl get pods -n flux-operator -l job-name=flux-sample -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-          if [ -n "$POD" ]; then
-            echo "Testing Flux commands in pod: $POD"
-            kubectl exec -n flux-operator $POD -c flux-sample -- \
-              bash -c 'FLUX_URI=local:///mnt/flux/view/run/flux/local flux resource list' || echo "Flux not ready yet"
-            kubectl exec -n flux-operator $POD -c flux-sample -- \
-              bash -c 'FLUX_URI=local:///mnt/flux/view/run/flux/local flux run hostname' || echo "Flux run not ready"
-          else
-            echo "⚠️  Flux pod not found, skipping validation"
-          fi
-
-  test-slurm:
-    name: Test Slurm Setup
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
-          sudo docker image prune -af
-
-      - name: Install dependencies
-        run: |
-          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-amd64
-          chmod +x ./kind && sudo mv ./kind /usr/local/bin/
-          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
-          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-
-      - name: Generate SSH key
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "ci-test"
-
-      - name: Run setup script (Slurm only)
-        run: |
-          cd bootstrap
-          chmod +x setup_local_cluster.sh
-          INSTALL_SLURM=true INSTALL_FLUX=false ENABLE_ACCOUNTING=false \
-            ENABLE_ROOT_SSH=true ENABLE_SSSD=false \
-            timeout 20m ./setup_local_cluster.sh
-
-      - name: Verify Slurm deployment
-        run: |
-          echo "Checking Slurm namespace..."
-          kubectl get pods -n slurm
-          kubectl get all -n slurm
-          
-          echo "Checking Slurm CRDs..."
-          kubectl get crd | grep slinky
-          
-          # Wait for Slurm controller pod to be ready
-          echo "Waiting for Slurm controller..."
-          kubectl wait --for=condition=Ready pod/slurm-controller-0 -n slurm --timeout=300s
-          
-          # Wait for login service (if it exists)
-          echo "Waiting for Slurm login service..."
-          kubectl wait --for=condition=Ready pod -l app=slurm-login-slinky -n slurm --timeout=60s || echo "Login service taking longer"
-          
-          echo "✓ Slurm cluster deployed successfully"
-
-      - name: Test Slurm functionality
-        run: |
-          echo "Testing Slurm via controller pod..."
-          kubectl exec slurm-controller-0 -n slurm -c slurmctld -- sinfo || echo "sinfo not ready yet"
-          
-          # Try via login pod
-          LOGIN_POD=$(kubectl get pods -n slurm -l app=slurm-login-slinky -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-          if [ -n "$LOGIN_POD" ]; then
-            echo "Testing via login pod..."
-            kubectl exec -n slurm $LOGIN_POD -- sinfo || echo "Login pod not ready"
-          fi
-
-      - name: Validate Slurm
-        run: |
-          echo "=== Comprehensive Slurm Validation ==="
-          
-          echo "1. Checking Slurm version..."
-          kubectl exec slurm-controller-0 -n slurm -c slurmctld -- scontrol --version || echo "Could not get version"
-          
-          echo "2. Checking cluster state..."
-          kubectl exec slurm-controller-0 -n slurm -c slurmctld -- scontrol show config | head -20 || echo "Config not ready"
-          
-          echo "3. Checking node availability..."
-          kubectl exec slurm-controller-0 -n slurm -c slurmctld -- sinfo -N || echo "Nodes not ready"
-          
-          echo "4. Checking partition configuration..."
-          kubectl exec slurm-controller-0 -n slurm -c slurmctld -- scontrol show partition || echo "Partitions not configured"
-          
-          echo "5. Testing job submission..."
-          kubectl exec slurm-controller-0 -n slurm -c slurmctld -- srun -N1 hostname || echo "Job submission not ready yet"
-          
-          echo "6. Checking REST API availability..."
-          kubectl get svc slurm-restapi -n slurm || echo "REST API service not found"
-          
-          echo "7. Verifying operator is managing resources..."
-          kubectl get controllers.slinky.slurm.net -n slurm || echo "No controller CR found"
-          kubectl get nodesets.slinky.slurm.net -n slurm || echo "No nodeset CR found"
-          
-          echo ""
-          echo "✓ Slurm cluster validation complete"
-          echo "Note: Full demo require SSH setup - run locally with:"
-          echo "  ./bootstrap/demo/demo_slurm_jobs.sh"
+          kubectl describe pods -n ${HPCMCP_NAMESPACE}
+          kubectl logs -n ${HPCMCP_NAMESPACE} -l app=hpc-mcp-server || true
