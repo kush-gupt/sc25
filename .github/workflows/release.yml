@@ -34,9 +34,9 @@ jobs:
         id: version
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "VERSION=${{ inputs.version }}" >> $GITHUB_OUTPUT
+            echo "VERSION=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
           else
-            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Install Podman + qemu
@@ -54,11 +54,11 @@ jobs:
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ env.IMAGE_NAME }}
         run: |
-          podman manifest create ${IMAGE}:${{ steps.version.outputs.VERSION }}
+          podman manifest create "${IMAGE}:${{ steps.version.outputs.VERSION }}"
           for ARCH in amd64 arm64; do
             podman build \
               --platform linux/${ARCH} \
-              --manifest ${IMAGE}:${{ steps.version.outputs.VERSION }} \
+              --manifest "${IMAGE}:${{ steps.version.outputs.VERSION }}" \
               -f mcp-servers/hpc_mcp_server/Containerfile \
               mcp-servers/hpc_mcp_server
           done
@@ -67,8 +67,8 @@ jobs:
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ env.IMAGE_NAME }}
         run: |
-          podman manifest push --all ${IMAGE}:${{ steps.version.outputs.VERSION }} ${IMAGE}:${{ steps.version.outputs.VERSION }}
-          podman manifest push --all ${IMAGE}:${{ steps.version.outputs.VERSION }} ${IMAGE}:latest
+          podman manifest push --all "${IMAGE}:${{ steps.version.outputs.VERSION }}" "${IMAGE}:${{ steps.version.outputs.VERSION }}"
+          podman manifest push --all "${IMAGE}:${{ steps.version.outputs.VERSION }}" "${IMAGE}:latest"
 
       - name: Generate release notes
         env:
@@ -85,15 +85,15 @@ jobs:
           
           EOT
           
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          PREVIOUS_TAG="$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")"
           if [ -n "$PREVIOUS_TAG" ]; then
-            git log ${PREVIOUS_TAG}..HEAD --oneline --pretty=format:"- %s (%h)" >> release-notes.md
+            git log "${PREVIOUS_TAG}"..HEAD --oneline --pretty=format:"- %s (%h)" >> release-notes.md
           else
             echo "Initial release" >> release-notes.md
           fi
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
           name: Release ${{ steps.version.outputs.VERSION }}

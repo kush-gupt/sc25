@@ -9,8 +9,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository_owner }}
-  IMAGE_NAME: hpc-mcp-server
+  IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/hpc-mcp-server
 
 jobs:
   build-and-test:
@@ -19,9 +18,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    env:
-      FULL_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ env.IMAGE_NAME }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,7 +32,7 @@ jobs:
         run: |
           cd mcp-servers/hpc_mcp_server
           podman build \
-            -t ${{ env.FULL_IMAGE }}:${{ github.sha }} \
+            -t ${{ env.IMAGE_REPO }}:${{ github.sha }} \
             -f Containerfile \
             .
 
@@ -63,9 +59,9 @@ jobs:
       - name: Push image (main only)
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
-          podman push ${{ env.FULL_IMAGE }}:${{ github.sha }}
-          podman tag ${{ env.FULL_IMAGE }}:${{ github.sha }} ${{ env.FULL_IMAGE }}:latest
-          podman push ${{ env.FULL_IMAGE }}:latest
+          podman push ${{ env.IMAGE_REPO }}:${{ github.sha }}
+          podman tag ${{ env.IMAGE_REPO }}:${{ github.sha }} ${{ env.IMAGE_REPO }}:latest
+          podman push ${{ env.IMAGE_REPO }}:latest
 
       - name: Lint shell scripts
         run: |
@@ -101,7 +97,7 @@ jobs:
       - name: Disable docker CLI (prefer Podman)
         run: |
           if command -v docker >/dev/null 2>&1; then
-            sudo mv $(command -v docker) /usr/local/bin/docker.disabled
+            sudo mv "$(command -v docker)" /usr/local/bin/docker.disabled
           fi
 
       - name: Free disk space
@@ -134,8 +130,8 @@ jobs:
       - name: Deploy MCP server overlay
         run: |
           kubectl apply -k manifests/hpc-mcp-server/overlays/local
-          kubectl wait --for=condition=Available deployment/hpc-mcp-server -n ${HPCMCP_NAMESPACE} --timeout=180s
-          kubectl wait --for=condition=Ready pod -l app=hpc-mcp-server -n ${HPCMCP_NAMESPACE} --timeout=180s
+          kubectl wait --for=condition=Available deployment/hpc-mcp-server -n "${HPCMCP_NAMESPACE}" --timeout=180s
+          kubectl wait --for=condition=Ready pod -l app=hpc-mcp-server -n "${HPCMCP_NAMESPACE}" --timeout=180s
 
       - name: Run integration test
         run: |
@@ -146,5 +142,5 @@ jobs:
         if: failure()
         run: |
           kubectl get pods --all-namespaces
-          kubectl describe pods -n ${HPCMCP_NAMESPACE}
-          kubectl logs -n ${HPCMCP_NAMESPACE} -l app=hpc-mcp-server || true
+          kubectl describe pods -n "${HPCMCP_NAMESPACE}"
+          kubectl logs -n "${HPCMCP_NAMESPACE}" -l app=hpc-mcp-server || true
