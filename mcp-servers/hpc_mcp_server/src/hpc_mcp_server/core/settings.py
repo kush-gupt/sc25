@@ -32,8 +32,13 @@ class Settings(BaseModel):
     @field_validator("allow_namespaces", mode="before")
     @classmethod
     def _parse_namespaces(cls, value):
+        if value is None:
+            return []
         if isinstance(value, str):
-            return [x.strip() for x in value.split(",") if x.strip()]
+            stripped = value.strip()
+            if not stripped:
+                return []
+            return [x.strip() for x in stripped.split(",") if x.strip()]
         return value
 
 

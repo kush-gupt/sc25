@@ -42,6 +42,12 @@ def flux_apply_minicluster(
     ),
     wait_ready: bool = Field(default=False, description="Wait until MiniCluster is running"),
 ) -> Dict:
+    if batch:
+        if not command or not command.strip():
+            raise ValueError("batch executions require a command to run via Flux")
+        if tasks is None or tasks <= 0:
+            raise ValueError("batch executions require a positive tasks value")
+
     container = ContainerConfig(
         image=container_image,
         command=command,

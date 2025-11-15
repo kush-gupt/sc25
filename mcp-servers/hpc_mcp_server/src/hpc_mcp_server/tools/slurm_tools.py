@@ -48,7 +48,14 @@ def slurm_get_job(
     data = client.get_job(job_id)
 
     if not isinstance(data, dict):
-        return {"error": "Unexpected response from Slurm", "success": False, "raw": data}
+        return {
+            "error": (
+                f"Unexpected response from Slurm: type={type(data).__name__}, "
+                f"content={repr(data)[:200]}"
+            ),
+            "success": False,
+            "raw": data,
+        }
 
     jobs = data.get("jobs") or []
     if not jobs:
@@ -100,9 +107,9 @@ def slurm_queue_summary() -> Dict:
     jobs: List[Dict] = data.get("jobs", []) if isinstance(data, dict) else []
     summary = {
         "total_jobs": len(jobs),
-        "running": sum(1 for job in jobs if job.get("job_state") == "RUNNING"),
-        "pending": sum(1 for job in jobs if job.get("job_state") == "PENDING"),
-        "completed": sum(1 for job in jobs if job.get("job_state") == "COMPLETED"),
+        "running": sum(job.get("job_state") == "RUNNING" for job in jobs),
+        "pending": sum(job.get("job_state") == "PENDING" for job in jobs),
+        "completed": sum(job.get("job_state") == "COMPLETED" for job in jobs),
     }
     return {"summary": summary, "sample": jobs[:20]}
 
@@ -126,7 +133,7 @@ def _summarize_job(job: Dict[str, Any]) -> Dict[str, Any]:
     else:
         exit_code = _numeric(exit_code)
 
-    summary = {
+    return {
         "job_id": job.get("job_id"),
         "name": job.get("name"),
         "user": job.get("user_name"),
@@ -145,8 +152,6 @@ def _summarize_job(job: Dict[str, Any]) -> Dict[str, Any]:
         "node_list": job.get("nodes"),
         "exit_code": exit_code,
     }
-
-    return summary
 
 
 def _format_status(summary: Dict[str, Any]) -> str:
@@ -201,13 +206,14 @@ def _numeric(value: Any) -> int | float | None:
 
 
 def _format_duration(seconds: int) -> str:
-    seconds = int(seconds)
-    hours, remainder = divmod(seconds, 3600)
+    hours, remainder = divmod(int(seconds), 3600)
     minutes, secs = divmod(remainder, 60)
     parts = []
     if hours:
         parts.append(f"{hours}h")
-    if minutes or (hours and secs):
+    if minutes:
         parts.append(f"{minutes}m")
+    elif hours and secs:
+        parts.append("0m")
     parts.append(f"{secs}s")
     return "".join(parts)

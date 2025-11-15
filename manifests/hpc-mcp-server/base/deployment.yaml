@@ -18,7 +18,7 @@ spec:
       serviceAccountName: hpc-mcp-sa
       containers:
         - name: hpc-mcp-server
-          image: quay.io/kugupta/hpc-mcp-server:latest
+          image: ghcr.io/kush-gupt/hpc-mcp-server:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 5000

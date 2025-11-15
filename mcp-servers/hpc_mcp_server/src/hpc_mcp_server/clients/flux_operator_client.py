@@ -32,7 +32,7 @@ class ContainerConfig(BaseModel):
     @field_validator("image")
     @classmethod
     def validate_image(cls, value: str) -> str:
-        if ".." in value or value.strip() == "":
+        if ".." in value or not value.strip():
             raise ValueError("container image must be non-empty and sanitized")
         return value
 
@@ -57,13 +57,12 @@ class MiniClusterSpec(BaseModel):
         return v
 
     def to_manifest(self, name: str, namespace: str) -> Dict[str, Any]:
-        body = {
+        return {
             "apiVersion": f"{GROUP}/{VERSION}",
             "kind": "MiniCluster",
             "metadata": {"name": name, "namespace": namespace},
             "spec": json.loads(self.model_dump_json(by_alias=True, exclude_none=True)),
         }
-        return body
 
 
 class FluxOperatorClient:
@@ -123,8 +122,7 @@ class FluxOperatorClient:
         name = name or self.default_minicluster
         body = spec.to_manifest(name=name, namespace=ns)
 
-        existing = self._minicluster_exists(name, ns)
-        if existing:
+        if existing := self._minicluster_exists(name, ns):
             logger.info("Patching MiniCluster %s/%s", ns, name)
             result = self.api.patch_namespaced_custom_object(GROUP, VERSION, ns, PLURAL, name, body)
         else:

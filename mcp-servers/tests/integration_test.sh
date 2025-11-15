@@ -41,6 +41,30 @@ sys.exit("No JSON payload found in response")
 ' || return 1
 }
 
+wait_for_port() {
+  local host="$1"
+  local port="$2"
+  local attempts="${3:-30}"
+  for _ in $(seq 1 "$attempts"); do
+    if python - <<PY >/dev/null 2>&1
+import socket
+sock = socket.socket()
+sock.settimeout(0.5)
+try:
+    sock.connect(("$host", $port))
+except OSError:
+    raise SystemExit(1)
+else:
+    raise SystemExit(0)
+PY
+    then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 if ! kubectl get svc hpc-mcp-server -n "$NAMESPACE" >/dev/null 2>&1; then
   echo "Service hpc-mcp-server not found in namespace $NAMESPACE" >&2
   exit 1
@@ -51,7 +75,11 @@ PF_LOG=$(mktemp)
 kubectl port-forward -n "$NAMESPACE" svc/hpc-mcp-server "$PORT:$PORT" >"$PF_LOG" 2>&1 &
 PF_PID=$!
 trap 'kill $PF_PID 2>/dev/null || true; rm -f "$PF_LOG"' EXIT
-sleep 4
+if ! wait_for_port "127.0.0.1" "$PORT"; then
+  echo "Port-forward did not become ready. Logs:"
+  cat "$PF_LOG"
+  exit 1
+fi
 
 curl -fsS "http://127.0.0.1:${PORT}/health" | jq .
 

@@ -1,6 +1,21 @@
 #!/bin/bash
 set -e
 
+wait_with_logs() {
+    local description="$1"
+    shift
+    local log
+    log=$(mktemp)
+    if "$@" >"$log" 2>&1; then
+        rm -f "$log"
+        return 0
+    fi
+    echo "⚠ ${description} did not complete successfully:"
+    cat "$log"
+    rm -f "$log"
+    return 1
+}
+
 CLUSTER_NAME="${CLUSTER_NAME:-hpc-local}"
 SLURM_NS="slurm"
 SLINKY_NS="slinky"
@@ -61,7 +76,7 @@ nodes:
 EOF
 fi
 
-kubectl wait --for=condition=Ready nodes --all --timeout=120s
+wait_with_logs "all nodes becoming Ready" kubectl wait --for=condition=Ready nodes --all --timeout=120s
 
 # Install ArgoCD first
 if [ "$INSTALL_ARGOCD" = "true" ] || [ "$INSTALL_SLURM" = "true" ] || [ "$INSTALL_FLUX" = "true" ]; then
@@ -76,12 +91,15 @@ if [ "$INSTALL_ARGOCD" = "true" ] || [ "$INSTALL_SLURM" = "true" ] || [ "$INSTAL
     kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml >/dev/null 2>&1
     
     # Wait for all ArgoCD components to be ready
-    kubectl wait --for=condition=Available --timeout=300s \
-        deployment/argocd-server deployment/argocd-repo-server deployment/argocd-applicationset-controller -n argocd >/dev/null 2>&1 || true
-    kubectl wait --for=condition=Ready --timeout=300s \
-        pod -l app.kubernetes.io/name=argocd-server -n argocd >/dev/null 2>&1 || true
-    kubectl wait --for=condition=Ready --timeout=300s \
-        pod -l app.kubernetes.io/name=argocd-repo-server -n argocd >/dev/null 2>&1 || true
+    wait_with_logs "ArgoCD deployments becoming Available" \
+        kubectl wait --for=condition=Available --timeout=300s \
+        deployment/argocd-server deployment/argocd-repo-server deployment/argocd-applicationset-controller -n argocd || true
+    wait_with_logs "argocd-server pods becoming Ready" \
+        kubectl wait --for=condition=Ready --timeout=300s \
+        pod -l app.kubernetes.io/name=argocd-server -n argocd || true
+    wait_with_logs "argocd-repo-server pods becoming Ready" \
+        kubectl wait --for=condition=Ready --timeout=300s \
+        pod -l app.kubernetes.io/name=argocd-repo-server -n argocd || true
     
     echo "✓ ArgoCD installed"
 fi
@@ -92,8 +110,9 @@ if [ "$INSTALL_SLURM" = "true" ]; then
         echo "Deploying cert-manager..."
         kubectl apply -f "$(dirname "${BASH_SOURCE[0]}")/../argocd/applications/cert-manager.yaml" >/dev/null 2>&1
         until [ "$(kubectl get application cert-manager -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null)" = "Healthy" ]; do sleep 2; done
-        kubectl wait --for=condition=Available --timeout=300s \
-            deployment/cert-manager{,-webhook,-cainjector} -n cert-manager >/dev/null 2>&1 || true
+        wait_with_logs "cert-manager deployments becoming Available" \
+            kubectl wait --for=condition=Available --timeout=300s \
+            deployment/cert-manager{,-webhook,-cainjector} -n cert-manager || true
         echo "✓ cert-manager deployed"
     fi
 fi
@@ -104,9 +123,11 @@ if [ "$INSTALL_FLUX" = "true" ]; then
         echo "Deploying Flux Operator..."
         kubectl apply -f "$(dirname "${BASH_SOURCE[0]}")/../argocd/applications/flux-operator.yaml" >/dev/null 2>&1
         until [ "$(kubectl get application flux-operator -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null)" = "Healthy" ]; do sleep 2; done
-        kubectl wait --for=condition=Available --timeout=300s \
-            deployment/operator-controller-manager -n operator-system >/dev/null 2>&1 || true
-        kubectl wait --for condition=established --timeout=60s crd/miniclusters.flux-framework.org >/dev/null 2>&1 || true
+        wait_with_logs "Flux operator controller deployment becoming Available" \
+            kubectl wait --for=condition=Available --timeout=300s \
+            deployment/operator-controller-manager -n operator-system || true
+        wait_with_logs "flux MiniCluster CRD establishment" \
+            kubectl wait --for condition=established --timeout=60s crd/miniclusters.flux-framework.org || true
         echo "✓ Flux Operator deployed"
     fi
     
@@ -130,13 +151,14 @@ if [ "$INSTALL_SLURM" = "true" ]; then
         until [ "$(kubectl get application slurm-operator-crds -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null)" = "Synced" ]; do sleep 2; done
     fi
     
-    kubectl wait --for condition=established --timeout=120s \
+    wait_with_logs "Slurm CRDs establishing" \
+        kubectl wait --for condition=established --timeout=120s \
         crd/accountings.slinky.slurm.net \
         crd/controllers.slinky.slurm.net \
         crd/loginsets.slinky.slurm.net \
         crd/nodesets.slinky.slurm.net \
         crd/restapis.slinky.slurm.net \
-        crd/tokens.slinky.slurm.net >/dev/null 2>&1 || true
+        crd/tokens.slinky.slurm.net || true
     echo "✓ Slurm CRDs deployed"
     
     # Deploy operator
@@ -146,10 +168,12 @@ if [ "$INSTALL_SLURM" = "true" ]; then
         until [ "$(kubectl get application slurm-operator -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null)" = "Healthy" ]; do sleep 2; done
     fi
     
-    kubectl wait --for=condition=Available --timeout=300s \
-        deployment -l app.kubernetes.io/name=slurm-operator -n "${SLINKY_NS}" >/dev/null 2>&1 || true
-    kubectl wait --for=condition=Ready --timeout=300s \
-        pod -l app.kubernetes.io/name=slurm-operator -n "${SLINKY_NS}" >/dev/null 2>&1 || true
+    wait_with_logs "Slurm operator deployments becoming Available" \
+        kubectl wait --for=condition=Available --timeout=300s \
+        deployment -l app.kubernetes.io/name=slurm-operator -n "${SLINKY_NS}" || true
+    wait_with_logs "Slurm operator pods becoming Ready" \
+        kubectl wait --for=condition=Ready --timeout=300s \
+        pod -l app.kubernetes.io/name=slurm-operator -n "${SLINKY_NS}" || true
     echo "✓ Slurm operator deployed"
 
 # Create Slurm namespace with privileged security
@@ -217,7 +241,8 @@ spec:
     max_allowed_packet=256M
 EOF
         
-        kubectl wait --for=condition=Ready --timeout=300s mariadb/mariadb -n "${SLURM_NS}" >/dev/null 2>&1 || true
+        wait_with_logs "MariaDB instance becoming Ready" \
+            kubectl wait --for=condition=Ready --timeout=300s mariadb/mariadb -n "${SLURM_NS}" || true
         echo "✓ MariaDB deployed"
     fi
 fi
@@ -263,9 +288,12 @@ if ! helm list -n "${SLURM_NS}" --short | grep -q "^slurm$"; then
     eval "${HELM_CMD}" >/dev/null 2>&1
     
     # Wait for Slurm components
-    kubectl wait --for=condition=Ready pod -l app.kubernetes.io/component=slurmctld -n "${SLURM_NS}" --timeout=600s >/dev/null 2>&1 || echo "⚠ Controller pod not ready yet"
-    kubectl wait --for=condition=Ready pod -l app.kubernetes.io/component=worker -n "${SLURM_NS}" --timeout=600s >/dev/null 2>&1 || echo "⚠ Worker pods not ready yet"
-    kubectl wait --for=condition=Ready pod -l app.kubernetes.io/component=login -n "${SLURM_NS}" --timeout=600s >/dev/null 2>&1 || echo "⚠ Login pod not ready yet"
+    wait_with_logs "slurmctld pod readiness" \
+        kubectl wait --for=condition=Ready pod -l app.kubernetes.io/component=slurmctld -n "${SLURM_NS}" --timeout=600s || echo "⚠ Controller pod not ready yet"
+    wait_with_logs "Slurm worker pods readiness" \
+        kubectl wait --for=condition=Ready pod -l app.kubernetes.io/component=worker -n "${SLURM_NS}" --timeout=600s || echo "⚠ Worker pods not ready yet"
+    wait_with_logs "Slurm login pod readiness" \
+        kubectl wait --for=condition=Ready pod -l app.kubernetes.io/component=login -n "${SLURM_NS}" --timeout=600s || echo "⚠ Login pod not ready yet"
     
     # Create default test user if SSSD is enabled
     if [ "$ENABLE_SSSD" = "true" ]; then
@@ -290,11 +318,13 @@ if ! helm list -n "${SLURM_NS}" --short | grep -q "^slurm$"; then
     fi
     
     if [ "$ENABLE_ACCOUNTING" = "true" ]; then
-        kubectl wait --for=condition=Ready pod slurm-accounting-0 -n "${SLURM_NS}" --timeout=120s >/dev/null 2>&1 || echo "⚠ Accounting pod not ready yet"
+        wait_with_logs "Slurm accounting pod readiness" \
+            kubectl wait --for=condition=Ready pod slurm-accounting-0 -n "${SLURM_NS}" --timeout=120s || echo "⚠ Accounting pod not ready yet"
         kubectl exec -n "${SLURM_NS}" slurm-controller-0 -c slurmctld -- rm -f /var/spool/slurmctld/slurm_slurm/clustername >/dev/null 2>&1 || true
         kubectl delete pod slurm-controller-0 -n "${SLURM_NS}" >/dev/null 2>&1 || true
         sleep 15
-        kubectl wait --for=condition=Ready pod slurm-controller-0 -n "${SLURM_NS}" --timeout=120s >/dev/null 2>&1 || echo "⚠ Controller may still be initializing"
+        wait_with_logs "slurm-controller readiness after restart" \
+            kubectl wait --for=condition=Ready pod slurm-controller-0 -n "${SLURM_NS}" --timeout=120s || echo "⚠ Controller may still be initializing"
     fi
     
     echo "✓ Slurm cluster deployed"

@@ -17,7 +17,10 @@ echo "Building unified MCP server image..."
 IMAGE="localhost/hpc-mcp-server:latest"
 
 echo "Loading image into kind..."
-podman save "$IMAGE" | kind load image-archive /dev/stdin --name "${CLUSTER_NAME}"
+TMP_IMAGE_FILE="$(mktemp)"
+trap 'rm -f "$TMP_IMAGE_FILE"' EXIT
+podman save "$IMAGE" -o "$TMP_IMAGE_FILE"
+kind load image-archive "$TMP_IMAGE_FILE" --name "${CLUSTER_NAME}"
 
 if [ ! -d "$KUSTOMIZE_PATH" ]; then
     echo "Error: missing kustomize overlay at $KUSTOMIZE_PATH" >&2

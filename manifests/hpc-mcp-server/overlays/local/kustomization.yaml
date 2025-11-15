@@ -4,6 +4,11 @@ kind: Kustomization
 resources:
   - ../../base
 
+images:
+  - name: ghcr.io/kush-gupt/hpc-mcp-server
+    newName: localhost/hpc-mcp-server
+    newTag: latest
+
 patches:
   - target:
       kind: Deployment
@@ -18,5 +23,4 @@ patches:
           spec:
             containers:
               - name: hpc-mcp-server
-                image: localhost/hpc-mcp-server:latest
                 imagePullPolicy: IfNotPresent
