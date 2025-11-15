@@ -19,7 +19,7 @@ sleep 4
 curl -fsS "http://127.0.0.1:${PORT}/health" | jq .
 
 echo "Requesting tools/list..."
-ACCEPT_HEADER="application/json, text/event-stream"
+ACCEPT_HEADER="application/json"
 
 cat <<REQ | curl -fsS \
   -H 'Content-Type: application/json' \
