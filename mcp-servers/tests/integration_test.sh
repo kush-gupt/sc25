@@ -5,11 +5,26 @@ NAMESPACE="${NAMESPACE:-hpc-mcp}"
 PORT="${PORT:-5000}"
 
 pretty_print_sse_json() {
-  python - <<'PY'
+  python -c '
 import json
 import sys
 
-for raw in sys.stdin:
+payload = sys.stdin.read().strip()
+
+def emit(obj):
+    json.dump(obj, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    sys.exit(0)
+
+if not payload:
+    sys.exit("No data returned from server")
+
+try:
+    emit(json.loads(payload))
+except json.JSONDecodeError:
+    pass
+
+for raw in payload.splitlines():
     line = raw.strip()
     if not line or line.startswith(":"):
         continue
@@ -18,15 +33,12 @@ for raw in sys.stdin:
     if not line:
         continue
     try:
-        obj = json.loads(line)
+        emit(json.loads(line))
     except json.JSONDecodeError:
         continue
-    json.dump(obj, sys.stdout, indent=2)
-    sys.stdout.write("\n")
-    sys.exit(0)
 
-sys.exit("No JSON payload found in SSE stream")
-PY
+sys.exit("No JSON payload found in response")
+' || return 1
 }
 
 if ! kubectl get svc hpc-mcp-server -n "$NAMESPACE" >/dev/null 2>&1; then
