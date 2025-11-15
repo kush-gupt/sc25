@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+images:
+  - name: ghcr.io/kush-gupt/hpc-mcp-server
+    newName: localhost/hpc-mcp-server
+    newTag: latest
+
+patches:
+  - target:
+      kind: Deployment
+      name: hpc-mcp-server
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: hpc-mcp-server
+      spec:
+        template:
+          spec:
+            containers:
+              - name: hpc-mcp-server
+                imagePullPolicy: IfNotPresent

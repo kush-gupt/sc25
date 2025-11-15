@@ -10,7 +10,7 @@ spec:
   source:
     repoURL: ghcr.io/slinkyproject/charts
     chart: slurm-operator
-    targetRevision: 0.4.1
+    targetRevision: 1.0.0-rc1
   destination:
     server: https://kubernetes.default.svc
     namespace: slinky

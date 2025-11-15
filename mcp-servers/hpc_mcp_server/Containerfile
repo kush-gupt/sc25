@@ -1,0 +1,25 @@
+FROM quay.io/centos/centos:stream10
+
+LABEL maintainer="Kush Gupta"
+LABEL description="Unified Slurm + Flux Operator MCP server"
+
+RUN dnf install -y python3.12 python3-pip && dnf clean all
+
+WORKDIR /app
+
+COPY pyproject.toml README.md /app/
+COPY src /app/src
+
+RUN pip3 install --no-cache-dir .
+
+ENV PYTHONUNBUFFERED=1 \
+    MCP_TRANSPORT=http \
+    MCP_HOST=0.0.0.0 \
+    MCP_PORT=5000 \
+    SLURM_REST_URL=http://slurm-restapi.slurm.svc.cluster.local:6820 \
+    SLURM_NAMESPACE=slurm \
+    SLURM_USER=slurm \
+    FLUX_NAMESPACE=flux-operator \
+    FLUX_MINICLUSTER=flux-sample
+
+CMD ["python3", "-m", "hpc_mcp_server"]

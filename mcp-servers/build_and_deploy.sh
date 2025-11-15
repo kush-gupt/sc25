@@ -1,60 +1,37 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CLUSTER_NAME="${CLUSTER_NAME:-hpc-local}"
+KUSTOMIZE_PATH="${PROJECT_ROOT}/manifests/hpc-mcp-server/overlays/local"
 
-# Check cluster exists
 if ! kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
-    echo "Error: Cluster '${CLUSTER_NAME}' not found. Run: ../bootstrap/setup_local_cluster.sh"
+    echo "Error: kind cluster '${CLUSTER_NAME}' not found. Run ../bootstrap/setup_local_cluster.sh" >&2
     exit 1
 fi
 
-# Check deployments
-SLURM_READY=false
-FLUX_READY=false
-
-kubectl get namespace slurm >/dev/null 2>&1 && \
-    kubectl get pod slurm-controller-0 -n slurm >/dev/null 2>&1 && SLURM_READY=true
-
-kubectl get namespace flux-operator >/dev/null 2>&1 && \
-    kubectl get pods -n flux-operator -l job-name=flux-sample 2>/dev/null | grep -q flux-sample && FLUX_READY=true
-
-if [ "$SLURM_READY" = false ] && [ "$FLUX_READY" = false ]; then
-    echo "Error: Neither Slurm nor Flux found. Run: ../bootstrap/setup_local_cluster.sh"
-    exit 1
-fi
-
-echo "Found: $([ "$SLURM_READY" = true ] && echo "Slurm")$([ "$SLURM_READY" = true ] && [ "$FLUX_READY" = true ] && echo " + ")$([ "$FLUX_READY" = true ] && echo "Flux")"
-
-# Build images
-echo "Building images..."
+echo "Building unified MCP server image..."
 "${SCRIPT_DIR}/build.sh"
 
-# Load images
-echo "Loading images into kind..."
-[ "$SLURM_READY" = true ] && podman save localhost/slurm-mcp-server:latest | kind load image-archive /dev/stdin --name "${CLUSTER_NAME}"
-[ "$FLUX_READY" = true ] && podman save localhost/flux-mcp-server:latest | kind load image-archive /dev/stdin --name "${CLUSTER_NAME}"
+IMAGE="localhost/hpc-mcp-server:latest"
 
-# Deploy
-echo "Deploying MCP servers..."
-if [ "$SLURM_READY" = true ]; then
-    kubectl get svc slurm-restapi -n slurm >/dev/null 2>&1 || echo "Warning: slurm-restapi service not found"
-    kubectl apply -k "${PROJECT_ROOT}/manifests/slurm-mcp-server/overlays/local"
-    kubectl wait --for=condition=Ready pod -l app=slurm-mcp-server -n slurm --timeout=60s 2>/dev/null || true
+echo "Loading image into kind..."
+TMP_IMAGE_FILE="$(mktemp)"
+trap 'rm -f "$TMP_IMAGE_FILE"' EXIT
+podman save "$IMAGE" -o "$TMP_IMAGE_FILE"
+kind load image-archive "$TMP_IMAGE_FILE" --name "${CLUSTER_NAME}"
+
+if [ ! -d "$KUSTOMIZE_PATH" ]; then
+    echo "Error: missing kustomize overlay at $KUSTOMIZE_PATH" >&2
+    exit 1
 fi
 
-if [ "$FLUX_READY" = true ]; then
-    kubectl apply -k "${PROJECT_ROOT}/manifests/flux-mcp-server/overlays/local"
-    kubectl wait --for=condition=Ready pod -l app=flux-mcp-server -n flux-operator --timeout=60s 2>/dev/null || true
-fi
+echo "Deploying unified MCP server..."
+kubectl apply -k "$KUSTOMIZE_PATH"
 
-# Verify
-echo "Deployment complete!"
-[ "$SLURM_READY" = true ] && kubectl get pods,svc -n slurm -l app=slurm-mcp-server
-[ "$FLUX_READY" = true ] && kubectl get pods,svc -n flux-operator -l app=flux-mcp-server
+kubectl wait --for=condition=Ready pod -l app=hpc-mcp-server -n hpc-mcp --timeout=120s 2>/dev/null || true
 
-echo ""
-echo "Run tests: cd ../tests && ./integration_test.sh"
+kubectl get pods,svc -n hpc-mcp -l app=hpc-mcp-server
 
+echo "Deployment complete. Use kubectl port-forward -n hpc-mcp svc/hpc-mcp-server 5000:5000"

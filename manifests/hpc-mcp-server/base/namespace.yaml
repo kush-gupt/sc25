@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hpc-mcp
+  labels:
+    app: hpc-mcp-server
+    istio-injection: disabled

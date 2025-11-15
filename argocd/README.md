@@ -16,8 +16,7 @@ kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/st
 kubectl apply -f root-app.yaml
 
 # Individual apps
-kubectl apply -f applications/slurm-mcp-server.yaml
-kubectl apply -f applications/flux-mcp-server.yaml
+kubectl apply -f applications/hpc-mcp-server.yaml
 ```
 
 **Access UI:**
@@ -39,11 +38,10 @@ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.pas
 **slurm-operator-crds** - Slinky CRDs (default namespace)  
 **slurm-operator** - Slinky/Slurm operator (slinky namespace)  
 
-### MCP Servers (Deployed via root-app.yaml)
+### MCP Server (Deployed via root-app.yaml)
 **root-app.yaml** - Manages all MCP child apps (argocd namespace)  
 **shared-resources** - Namespaces & storage (default namespace)  
-**slurm-mcp-server** - Slurm MCP server (slurm namespace)  
-**flux-mcp-server** - Flux MCP server (flux-operator namespace)  
+**hpc-mcp-server** - Unified Slurm + Flux MCP server (hpc-mcp namespace)  
 
 All use automated sync with prune and self-heal. See [main README](../README.md).
 
