@@ -1,0 +1,21 @@
+# batch_commands.txt - List of commands for Flux bulk submission
+#
+# Purpose: Test Flux bulk job submission via submit_batch tool
+# Each line represents a separate job to submit
+#
+# Usage with MCP server:
+#   submit_batch(
+#       cluster="flux-cluster",
+#       commands=<contents of this file as array>
+#   )
+
+echo "Task 1: Processing dataset A" && sleep 5 && echo "Task 1 complete"
+echo "Task 2: Processing dataset B" && sleep 5 && echo "Task 2 complete"
+echo "Task 3: Processing dataset C" && sleep 5 && echo "Task 3 complete"
+echo "Task 4: Processing dataset D" && sleep 5 && echo "Task 4 complete"
+echo "Task 5: Processing dataset E" && sleep 5 && echo "Task 5 complete"
+python3 -c "import time; print('Task 6: Python job'); time.sleep(5); print('Task 6 complete')"
+python3 -c "import time; print('Task 7: Python job'); time.sleep(5); print('Task 7 complete')"
+python3 -c "import time; print('Task 8: Python job'); time.sleep(5); print('Task 8 complete')"
+bash -c "echo 'Task 9: Bash inline'; sleep 5; echo 'Task 9 complete'"
+bash -c "echo 'Task 10: Bash inline'; sleep 5; echo 'Task 10 complete'"
