@@ -34,7 +34,7 @@ class FluxAdapter(BackendAdapter):
         self.namespace = config_dict["namespace"]
         self.minicluster = config_dict["minicluster"]
         self.flux_uri = config_dict.get(
-            "flux_uri", "local:///mnt/flux/view/run/flux/local"
+            "flux_uri", "local:///mnt/flux/config/run/flux/local"
         )
         self.container = config_dict.get("container", "flux-sample")
 
@@ -78,12 +78,13 @@ class FluxAdapter(BackendAdapter):
         except ApiException as e:
             raise Exception(f"Failed to get Flux pods: {e}")
 
-    async def _exec_flux_command(self, command: List[str]) -> str:
+    async def _exec_flux_command(self, command: List[str], stdin_data: Optional[str] = None) -> str:
         """
         Execute a flux command in the Flux pod
 
         Args:
             command: Command to execute (e.g., ["flux", "jobs"])
+            stdin_data: Optional data to pass via stdin
 
         Returns:
             Command output as string
@@ -93,12 +94,9 @@ class FluxAdapter(BackendAdapter):
         """
         pod_name = await self._get_flux_pod()
 
-        # Prepare command with FLUX_URI environment variable
-        full_command = [
-            "bash",
-            "-c",
-            f'export FLUX_URI="{self.flux_uri}"; {" ".join(command)}',
-        ]
+        # Build command array safely without shell injection
+        # Set FLUX_URI via env and execute command directly
+        full_command = ["sh", "-c", f'export FLUX_URI="{self.flux_uri}"; exec "$@"', "--"] + command
 
         try:
             # Execute command using kubernetes stream
@@ -109,13 +107,26 @@ class FluxAdapter(BackendAdapter):
                 container=self.container,
                 command=full_command,
                 stderr=True,
-                stdin=False,
+                stdin=bool(stdin_data),
                 stdout=True,
                 tty=False,
-                _preload_content=True,
+                _preload_content=False if stdin_data else True,
             )
 
-            return resp
+            # If we have stdin data, write it and read response
+            if stdin_data:
+                resp.write_stdin(stdin_data)
+                resp.close()
+                output = ""
+                while resp.is_open():
+                    if resp.peek_stdout():
+                        output += resp.read_stdout()
+                    if resp.peek_stderr():
+                        # Collect stderr for error reporting
+                        pass
+                return output
+            else:
+                return resp
 
         except ApiException as e:
             raise Exception(f"Failed to exec command in pod {pod_name}: {e}")
@@ -189,18 +200,11 @@ class FluxAdapter(BackendAdapter):
             working_dir = params.working_dir or "/tmp"
             cmd.extend(["--cwd", working_dir])
 
-            # Extract script content and add as bash command
-            # Remove shebang if present
-            script_lines = params.script.strip().split("\n")
-            if script_lines[0].startswith("#!"):
-                script_lines = script_lines[1:]
-            script_content = "\n".join(script_lines)
+            # Use '-' to tell flux submit to read script from stdin
+            cmd.append("-")
 
-            # Submit script via flux submit
-            cmd.extend(["bash", "-c", script_content])
-
-            # Execute submission
-            output = await self._exec_flux_command(cmd)
+            # Execute submission, passing script via stdin
+            output = await self._exec_flux_command(cmd, stdin_data=params.script)
 
             # Flux returns job ID on success (format: ƒAbCd12)
             job_id = output.strip()

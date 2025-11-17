@@ -1,6 +1,6 @@
 """Emergency protocol for lost or stolen passport."""
 
-from ...core.app import mcp
+from core.app import mcp
 
 
 @mcp.resource(

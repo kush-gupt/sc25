@@ -7,15 +7,20 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY src/ ./src/
+# Copy src/ contents to app root so imports work correctly
+COPY src/ ./
 
 # Set environment for HTTP transport
+# PYTHONDONTWRITEBYTECODE=1 prevents Python from writing .pyc files
+# Add current directory to PYTHONPATH so top-level imports work
 ENV MCP_TRANSPORT=http \
     MCP_HTTP_HOST=0.0.0.0 \
     MCP_HTTP_PORT=8080 \
-    MCP_HTTP_PATH=/mcp/
+    MCP_HTTP_PATH=/mcp/ \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/opt/app-root/src
 
 USER 1001
 
-# Run the application
-CMD ["python", "-m", "src.main"]
+# Run the application directly (main.py is now in the root of /opt/app-root/src)
+CMD ["python", "main.py"]
