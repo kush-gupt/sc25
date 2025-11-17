@@ -57,9 +57,11 @@ class SlurmAdapter(BackendAdapter):
 
         # Auto-generate JWT token
         user = self.auth_config.get("user", "root")
+        current_time = int(time.time())
         payload = {
-            "sub": user,  # Standard JWT subject claim (username)
-            "exp": int(time.time()) + 86400,  # 24 hour expiration
+            "sun": user,  # Slurm User Name (not standard "sub")
+            "iat": current_time,  # Issued at time
+            "exp": current_time + 86400,  # 24 hour expiration
         }
         self.jwt_token = jwt.encode(payload, jwt_secret, algorithm="HS256")
         return self.jwt_token

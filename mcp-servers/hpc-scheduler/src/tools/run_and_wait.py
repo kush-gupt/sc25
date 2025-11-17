@@ -22,7 +22,7 @@ async def run_and_wait(
     job_name: Annotated[str | None, Field(description="Name for the job")] = None,
     nodes: Annotated[int | None, Field(description="Number of nodes")] = None,
     tasks_per_node: Annotated[int | None, Field(description="Tasks per node")] = None,
-    time_limit: Annotated[str | None, Field(description="Time limit")] = None,
+    time_limit: Annotated[str | None, Field(description="Time limit. Flux: use '10m', '1h', '30s'. Slurm: use '10m', '1h', or '1:30:00'")] = None,
     timeout_minutes: Annotated[int, Field(description="Maximum time to wait")] = 60,
     poll_interval: Annotated[int, Field(description="Seconds between status checks")] = 10,
 ) -> str:

@@ -607,8 +607,9 @@ class FluxAdapter(BackendAdapter):
             NotImplementedError: This method is not yet implemented for Flux
         """
         raise NotImplementedError(
-            "submit_batch is not yet implemented for Flux adapter. "
-            "Use MockAdapter with USE_MOCK_BACKENDS=true for testing."
+            "submit_batch is not implemented for Flux adapter. "
+            "For batch job submission to Flux, use the submit_job tool multiple times instead. "
+            "Alternatively, use MockAdapter with USE_MOCK_BACKENDS=true for testing."
         )
 
     async def close(self):
