@@ -33,7 +33,7 @@ class UnifiedMCPServer:
             observer = start_hot_reload(self.mcp, self.src_root)
 
         transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
-        if transport == "http":
+        if transport in ("http", "streamable-http"):
             host = os.getenv("MCP_HTTP_HOST", "127.0.0.1")
             port = int(os.getenv("MCP_HTTP_PORT", "8000"))
             path = os.getenv("MCP_HTTP_PATH", "/mcp/")

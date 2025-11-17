@@ -21,7 +21,7 @@ async def submit_job(
     tasks_per_node: Annotated[Optional[int], "Number of tasks per node"] = None,
     cpus_per_task: Annotated[Optional[int], "CPUs per task"] = None,
     memory: Annotated[Optional[str], "Memory per node (e.g., 32GB, 1024MB)"] = None,
-    time_limit: Annotated[Optional[str], "Time limit (e.g., 1h, 30m, 2:00:00)"] = None,
+    time_limit: Annotated[Optional[str], "Time limit. Flux: use '10m', '1h', '30s'. Slurm: use '10m', '1h', or '1:30:00'"] = None,
     partition: Annotated[Optional[str], "Partition/queue to submit to (Slurm only)"] = None,
     output_path: Annotated[Optional[str], "Path for stdout output"] = None,
     error_path: Annotated[Optional[str], "Path for stderr output"] = None,
@@ -33,14 +33,17 @@ async def submit_job(
     The backend is automatically selected based on cluster configuration.
 
     Args:
-        cluster: Cluster name from registry
+        cluster: Cluster name from registry (e.g., 'flux-local', 'slurm-local')
         script: Job script content including shebang (e.g., #!/bin/bash)
         job_name: Optional name for the job
         nodes: Optional number of nodes to request
         tasks_per_node: Optional number of tasks per node
         cpus_per_task: Optional CPUs per task
         memory: Optional memory per node (e.g., 32GB, 1024MB)
-        time_limit: Optional time limit (e.g., 1h, 30m, 2:00:00)
+        time_limit: Optional time limit
+            - For Flux clusters: Use Flux Standard Duration (FSD) format: '10m', '1h', '30s'
+            - For Slurm clusters: Use '10m', '1h', '30s' OR 'HH:MM:SS' format like '1:30:00'
+            - DO NOT use 'HH:MM:SS' format with Flux - it will fail
         partition: Optional partition/queue to submit to (Slurm only)
         output_path: Optional path for stdout output
         error_path: Optional path for stderr output
@@ -104,17 +107,24 @@ async def submit_job(
         time_limit = time_limit.strip()
         if not time_limit:
             raise ToolError("Time limit parameter cannot be empty string")
-        # Check for valid time formats: 1h, 30m, 2:00:00, etc.
+        # Check for valid time formats
         import re
-        valid_formats = [
-            r'^\d+[hms]$',  # 1h, 30m, 60s
-            r'^\d+:\d+$',  # 1:30 (minutes:seconds)
-            r'^\d+:\d+:\d+$',  # 1:30:00 (hours:minutes:seconds)
+        fsd_formats = [
+            r'^\d+(\.\d+)?[hms]$',  # Flux Standard Duration: 1h, 30m, 60s, 1.5h
         ]
-        if not any(re.match(pattern, time_limit, re.IGNORECASE) for pattern in valid_formats):
+        hms_formats = [
+            r'^\d+:\d+$',  # MM:SS
+            r'^\d+:\d+:\d+$',  # HH:MM:SS
+        ]
+
+        is_fsd = any(re.match(pattern, time_limit, re.IGNORECASE) for pattern in fsd_formats)
+        is_hms = any(re.match(pattern, time_limit) for pattern in hms_formats)
+
+        if not (is_fsd or is_hms):
             raise ToolError(
                 f"Invalid time limit format: {time_limit}. "
-                "Expected formats: 1h, 30m, 60s, 1:30, or 1:30:00"
+                "For Flux: use Flux Standard Duration like '10m', '1h', '30s'. "
+                "For Slurm: use FSD or 'HH:MM:SS' format like '1:30:00'"
             )
 
     # Set default working directory if not provided

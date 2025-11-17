@@ -1,6 +1,6 @@
 """Country profile resource for Japan."""
 
-from ...core.app import mcp
+from core.app import mcp
 
 
 @mcp.resource(

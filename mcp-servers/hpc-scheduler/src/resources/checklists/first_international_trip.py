@@ -1,6 +1,6 @@
 """Travel checklist for first-time international travelers."""
 
-from ...core.app import mcp
+from core.app import mcp
 
 
 @mcp.resource(

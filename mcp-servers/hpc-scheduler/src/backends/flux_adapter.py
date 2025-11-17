@@ -34,7 +34,7 @@ class FluxAdapter(BackendAdapter):
         self.namespace = config_dict["namespace"]
         self.minicluster = config_dict["minicluster"]
         self.flux_uri = config_dict.get(
-            "flux_uri", "local:///mnt/flux/view/run/flux/local"
+            "flux_uri", "local:///mnt/flux/config/run/flux/local"
         )
         self.container = config_dict.get("container", "flux-sample")
 
@@ -78,12 +78,13 @@ class FluxAdapter(BackendAdapter):
         except ApiException as e:
             raise Exception(f"Failed to get Flux pods: {e}")
 
-    async def _exec_flux_command(self, command: List[str]) -> str:
+    async def _exec_flux_command(self, command: List[str], stdin_data: Optional[str] = None) -> str:
         """
         Execute a flux command in the Flux pod
 
         Args:
             command: Command to execute (e.g., ["flux", "jobs"])
+            stdin_data: Optional data to pass via stdin
 
         Returns:
             Command output as string
@@ -93,12 +94,9 @@ class FluxAdapter(BackendAdapter):
         """
         pod_name = await self._get_flux_pod()
 
-        # Prepare command with FLUX_URI environment variable
-        full_command = [
-            "bash",
-            "-c",
-            f'export FLUX_URI="{self.flux_uri}"; {" ".join(command)}',
-        ]
+        # Build command array safely without shell injection
+        # Set FLUX_URI via env and execute command directly
+        full_command = ["sh", "-c", f'export FLUX_URI="{self.flux_uri}"; exec "$@"', "--"] + command
 
         try:
             # Execute command using kubernetes stream
@@ -109,13 +107,63 @@ class FluxAdapter(BackendAdapter):
                 container=self.container,
                 command=full_command,
                 stderr=True,
-                stdin=False,
+                stdin=bool(stdin_data),
                 stdout=True,
                 tty=False,
-                _preload_content=True,
+                _preload_content=False if stdin_data else True,
             )
 
-            return resp
+            # If we have stdin data, write it and read response
+            if stdin_data:
+                import time
+
+                # Write stdin data and ensure it ends with newline
+                if not stdin_data.endswith('\n'):
+                    resp.write_stdin(stdin_data + '\n')
+                else:
+                    resp.write_stdin(stdin_data)
+
+                # Small delay to ensure data is written
+                time.sleep(0.1)
+
+                # Collect all output from stdout and stderr
+                output = ""
+                stderr_output = ""
+                no_data_count = 0
+                max_no_data_iterations = 30  # 30 seconds max wait
+
+                # Continue reading while the stream is open
+                while resp.is_open() and no_data_count < max_no_data_iterations:
+                    resp.update(timeout=1)
+
+                    had_data = False
+                    if resp.peek_stdout():
+                        output += resp.read_stdout()
+                        had_data = True
+                    if resp.peek_stderr():
+                        stderr_output += resp.read_stderr()
+                        had_data = True
+
+                    if had_data:
+                        no_data_count = 0
+                    else:
+                        no_data_count += 1
+
+                    # If we have output and haven't seen new data for 2 seconds, we're done
+                    if output.strip() and no_data_count >= 2:
+                        break
+
+                # Close the stream
+                resp.close()
+
+                # If we got stderr output, raise an exception
+                if stderr_output.strip():
+                    raise Exception(f"Command failed: {stderr_output}")
+
+                return output
+            else:
+                # When _preload_content=True, resp is a string
+                return resp if isinstance(resp, str) else str(resp)
 
         except ApiException as e:
             raise Exception(f"Failed to exec command in pod {pod_name}: {e}")
@@ -165,68 +213,97 @@ class FluxAdapter(BackendAdapter):
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
     async def submit_job(self, params: JobSubmitParams) -> JobSubmitResult:
-        """Submit a job to Flux via flux run command"""
+        """Submit a job to Flux via flux submit command using a temp file"""
+        import uuid
+        import base64
+
         try:
-            # Build flux submit command
-            cmd = ["flux", "submit"]
+            # Generate unique temp file path
+            script_id = str(uuid.uuid4())[:8]
+            temp_script = f"/tmp/flux_script_{script_id}.sh"
 
-            if params.job_name:
-                cmd.extend(["--setattr", f"user.name={params.job_name}"])
-            if params.nodes:
-                cmd.extend(["-N", str(params.nodes)])
-            if params.tasks_per_node:
-                cmd.extend(["-n", str(params.tasks_per_node)])
-            if params.cpus_per_task:
-                cmd.extend(["-c", str(params.cpus_per_task)])
-            if params.time_limit:
-                cmd.extend(["-t", params.time_limit])
-            if params.output_path:
-                cmd.extend(["-o", params.output_path])
-            if params.error_path:
-                cmd.extend(["-e", params.error_path])
+            # Encode script as base64 to avoid shell escaping issues
+            script_b64 = base64.b64encode(params.script.encode()).decode()
 
-            # Add working directory (flux uses --cwd)
-            working_dir = params.working_dir or "/tmp"
-            cmd.extend(["--cwd", working_dir])
+            # Write script to temp file using base64 decoding
+            write_cmd = ["sh", "-c", f"echo '{script_b64}' | base64 -d > {temp_script} && chmod +x {temp_script}"]
+            await self._exec_flux_command(write_cmd)
 
-            # Extract script content and add as bash command
-            # Remove shebang if present
-            script_lines = params.script.strip().split("\n")
-            if script_lines[0].startswith("#!"):
-                script_lines = script_lines[1:]
-            script_content = "\n".join(script_lines)
+            try:
+                # Build flux submit command pointing to the temp file
+                cmd = ["flux", "submit"]
 
-            # Submit script via flux submit
-            cmd.extend(["bash", "-c", script_content])
+                if params.job_name:
+                    cmd.extend(["--setattr", f"user.name={params.job_name}"])
+                if params.nodes:
+                    cmd.extend(["-N", str(params.nodes)])
+                if params.tasks_per_node:
+                    cmd.extend(["-n", str(params.tasks_per_node)])
+                if params.cpus_per_task:
+                    cmd.extend(["-c", str(params.cpus_per_task)])
+                if params.time_limit:
+                    cmd.extend(["-t", params.time_limit])
+                if params.output_path:
+                    cmd.extend(["-o", params.output_path])
+                if params.error_path:
+                    cmd.extend(["-e", params.error_path])
 
-            # Execute submission
-            output = await self._exec_flux_command(cmd)
+                # Add working directory (flux uses --cwd)
+                working_dir = params.working_dir or "/tmp"
+                cmd.extend(["--cwd", working_dir])
 
-            # Flux returns job ID on success (format: ƒAbCd12)
-            job_id = output.strip()
-            if not job_id:
-                return JobSubmitResult(success=False, error="No job ID returned")
+                # Add the temp script file path
+                cmd.append(temp_script)
 
-            return JobSubmitResult(success=True, job_id=job_id, state="PENDING")
+                # Execute submission using the temp file
+                output = await self._exec_flux_command(cmd)
+
+                # Flux returns job ID on success (format: ƒAbCd12)
+                job_id = output.strip() if isinstance(output, str) else ""
+                if not job_id:
+                    return JobSubmitResult(success=False, error=f"No job ID returned. Output type: {type(output)}, Output repr: {repr(output)}, Output str: {str(output)}, Is string: {isinstance(output, str)}")
+
+                return JobSubmitResult(success=True, job_id=job_id, state="PENDING")
+
+            finally:
+                # Clean up temp file
+                cleanup_cmd = ["rm", "-f", temp_script]
+                try:
+                    await self._exec_flux_command(cleanup_cmd)
+                except:
+                    pass  # Ignore cleanup errors
 
         except Exception as e:
-            return JobSubmitResult(success=False, error=str(e))
+            import traceback
+            return JobSubmitResult(success=False, error=f"Exception: {str(e)}, Type: {type(e).__name__}, Traceback: {traceback.format_exc()}")
 
     async def get_job(self, job_id: str) -> JobDetails:
         """Get job information from Flux"""
         try:
             # Use flux jobs with JSON output for detailed info
+            # Note: -a includes all jobs (active and inactive)
+            # We can't use --filter with -a, so fetch all and filter in Python
             output = await self._exec_flux_command(
-                ["flux", "jobs", "-o", "{id},{name},{state},{t_submit},{t_run},{t_inactive},{result},{nnodes},{ntasks},{duration},{runtime}", "--filter", f"id={job_id}"]
+                ["flux", "jobs", "-a", "--no-header", "-o", "{id},{name},{state},{t_submit},{t_run},{t_inactive},{result},{nnodes},{ntasks},{duration},{runtime}"]
             )
 
             if not output.strip():
+                raise Exception(f"No jobs found")
+
+            # Find the specific job in the output
+            job_line = None
+            for line in output.strip().split("\n"):
+                if line.startswith(job_id + ","):
+                    job_line = line
+                    break
+
+            if not job_line:
                 raise Exception(f"Job {job_id} not found")
 
             # Parse output (CSV-like format)
-            fields = output.strip().split(",")
+            fields = job_line.strip().split(",")
             if len(fields) < 11:
-                raise Exception(f"Invalid job data for {job_id}")
+                raise Exception(f"Invalid job data for {job_id}. Got {len(fields)} fields, expected 11. Output: {repr(job_line)}")
 
             job_id_actual = fields[0]
             name = fields[1] or "unnamed"
@@ -320,7 +397,7 @@ class FluxAdapter(BackendAdapter):
                 filter_args = ["--filter", f"state={flux_states}"]
 
             # Get job list
-            cmd = ["flux", "jobs", "-a", "-o", "{id},{name},{state},{t_submit},{runtime}"]
+            cmd = ["flux", "jobs", "-a", "--no-header", "-o", "{id},{name},{state},{t_submit},{runtime}"]
             if filter_args:
                 cmd.extend(filter_args)
 
@@ -530,8 +607,9 @@ class FluxAdapter(BackendAdapter):
             NotImplementedError: This method is not yet implemented for Flux
         """
         raise NotImplementedError(
-            "submit_batch is not yet implemented for Flux adapter. "
-            "Use MockAdapter with USE_MOCK_BACKENDS=true for testing."
+            "submit_batch is not implemented for Flux adapter. "
+            "For batch job submission to Flux, use the submit_job tool multiple times instead. "
+            "Alternatively, use MockAdapter with USE_MOCK_BACKENDS=true for testing."
         )
 
     async def close(self):

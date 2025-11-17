@@ -21,6 +21,11 @@ kind: ImageStream
 metadata:
   name: mcp-server
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp-server
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -35,6 +40,7 @@ spec:
       labels:
         app: mcp-server
     spec:
+      serviceAccountName: mcp-server
       containers:
       - name: mcp-server
         image: mcp-server:latest
@@ -53,13 +59,28 @@ spec:
           periodSeconds: 5
         env:
         - name: MCP_TRANSPORT
-          value: "http"
+          value: "streamable-http"
         - name: MCP_HTTP_HOST
           value: "0.0.0.0"
         - name: MCP_HTTP_PORT
           value: "8080"
         - name: MCP_HTTP_PATH
           value: "/mcp/"
+        - name: HPC_BACKEND
+          value: "slurm"  # Can be "slurm", "flux", or "mock"
+        - name: SLURM_ENDPOINT
+          value: "http://slurm-restapi.slurm.svc.cluster.local:6820"
+        - name: SLURM_USER
+          value: "root"
+        - name: SLURM_JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: hpc-mcp-secrets
+              key: slurm-jwt-secret
+        - name: FLUX_NAMESPACE
+          value: "flux-sample"
+        - name: FLUX_MINICLUSTER
+          value: "flux-sample"
         resources:
           limits:
             memory: "512Mi"

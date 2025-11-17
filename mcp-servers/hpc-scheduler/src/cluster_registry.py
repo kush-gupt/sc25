@@ -56,23 +56,57 @@ class ClusterRegistry:
 
     def _load_default_config(self):
         """Load default cluster configurations for local development"""
-        # Default configs matching bootstrap setup
-        default_clusters = [
-            {
+        # Check for environment variable configuration first
+        slurm_endpoint = os.getenv("SLURM_ENDPOINT")
+        slurm_user = os.getenv("SLURM_USER", "root")
+        slurm_jwt_secret = os.getenv("SLURM_JWT_SECRET")
+        flux_namespace = os.getenv("FLUX_NAMESPACE")
+        flux_minicluster = os.getenv("FLUX_MINICLUSTER", "flux-sample")
+
+        default_clusters = []
+
+        # Add Slurm cluster if configured
+        if slurm_endpoint:
+            slurm_config = {
+                "name": "slurm-local",
+                "type": "slurm",
+                "endpoint": slurm_endpoint,
+                "namespace": "slurm",
+                "auth": {"user": slurm_user},
+            }
+            if slurm_jwt_secret:
+                slurm_config["auth"]["jwt_secret"] = slurm_jwt_secret
+            else:
+                slurm_config["auth"]["jwt_auto_generate"] = True
+            default_clusters.append(slurm_config)
+        else:
+            # Fallback to hardcoded config
+            default_clusters.append({
                 "name": "slurm-local",
                 "type": "slurm",
                 "endpoint": "http://slurm-restapi.slurm.svc.cluster.local:6820",
                 "namespace": "slurm",
-                "auth": {"user": "slurm", "jwt_auto_generate": True},
-            },
-            {
+                "auth": {"user": "root", "jwt_auto_generate": True},
+            })
+
+        # Add Flux cluster if configured
+        if flux_namespace:
+            default_clusters.append({
+                "name": "flux-local",
+                "type": "flux",
+                "namespace": flux_namespace,
+                "minicluster": flux_minicluster,
+                "flux_uri": "local:///mnt/flux/config/run/flux/local",
+            })
+        else:
+            # Fallback to hardcoded config
+            default_clusters.append({
                 "name": "flux-local",
                 "type": "flux",
                 "namespace": "flux-operator",
                 "minicluster": "flux-sample",
-                "flux_uri": "local:///mnt/flux/view/run/flux/local",
-            },
-        ]
+                "flux_uri": "local:///mnt/flux/config/run/flux/local",
+            })
 
         for cluster_config in default_clusters:
             name = cluster_config["name"]

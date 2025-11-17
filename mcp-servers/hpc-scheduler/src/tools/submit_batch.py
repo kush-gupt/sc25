@@ -23,17 +23,20 @@ async def submit_batch(
     job_name_prefix: Annotated[str | None, Field(description="Prefix for job names")] = None,
     nodes: Annotated[int | None, Field(description="Nodes per job")] = None,
     tasks_per_node: Annotated[int | None, Field(description="Tasks per node per job")] = None,
-    time_limit: Annotated[str | None, Field(description="Time limit per job")] = None,
+    time_limit: Annotated[str | None, Field(description="Time limit per job. Flux: use '10m', '1h', '30s'. Slurm: use '10m', '1h', or '1:30:00'")] = None,
     max_concurrent: Annotated[int | None, Field(description="Maximum concurrent jobs (Slurm arrays only)")] = None,
     response_format: Annotated[str, Field(description="Response format: concise (default) or detailed")] = "concise",
 ) -> str:
     """Submit multiple jobs as an array or batch
 
+    NOTE: This tool is only implemented for Slurm clusters. For Flux clusters,
+    use the submit_job tool multiple times instead.
+
     Args:
-        cluster: Cluster name
+        cluster: Cluster name (must be a Slurm cluster)
         script: Base job script (may include array task variable)
         array_spec: Array specification for Slurm (e.g., 1-10, 1-100:2)
-        commands: List of commands for Flux bulk submission
+        commands: List of commands for Flux bulk submission (not implemented)
         job_name_prefix: Prefix for job names
         nodes: Nodes per job
         tasks_per_node: Tasks per node per job
@@ -45,6 +48,7 @@ async def submit_batch(
 
     Raises:
         ToolError: If validation fails or operation cannot be completed
+        NotImplementedError: If used with Flux cluster
     """
     try:
         # Input validation

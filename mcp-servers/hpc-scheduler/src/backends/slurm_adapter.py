@@ -42,19 +42,28 @@ class SlurmAdapter(BackendAdapter):
             JWT token string
 
         Raises:
-            Exception: If token generation fails
+            Exception: If token generation fails or jwt_secret not configured
         """
         if self.jwt_token:
             return self.jwt_token
 
-        # Auto-generate JWT token (simplified - production would use scontrol token)
-        user = self.auth_config.get("user", "slurm")
+        # Get JWT secret from configuration
+        jwt_secret = self.auth_config.get("jwt_secret")
+        if not jwt_secret:
+            raise Exception(
+                "jwt_secret is not configured for Slurm authentication. "
+                "Set auth.jwt_secret in backend configuration or provide auth.jwt_token directly."
+            )
+
+        # Auto-generate JWT token
+        user = self.auth_config.get("user", "root")
+        current_time = int(time.time())
         payload = {
-            "sun": user,  # Slurm User Name
-            "exp": int(time.time()) + 86400,  # 24 hour expiration
+            "sun": user,  # Slurm User Name (not standard "sub")
+            "iat": current_time,  # Issued at time
+            "exp": current_time + 86400,  # 24 hour expiration
         }
-        # Note: This is a simplified token. Real implementation would use Slurm's key
-        self.jwt_token = jwt.encode(payload, "slurm_secret", algorithm="HS256")
+        self.jwt_token = jwt.encode(payload, jwt_secret, algorithm="HS256")
         return self.jwt_token
 
     async def _make_request(
@@ -122,6 +131,47 @@ class SlurmAdapter(BackendAdapter):
         seconds = duration % 60
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
+    def _parse_time_limit(self, time_str: str) -> int:
+        """
+        Convert time limit string to minutes.
+        Supports formats: "5m", "1h", "2:00:00", "30", "1-02:30:00"
+        Returns: minutes as integer
+        """
+        if not time_str:
+            return 0
+
+        time_str = time_str.strip()
+
+        # Handle simple minute/hour suffixes (5m, 1h, 30s)
+        if time_str[-1] in ("m", "M"):
+            return int(time_str[:-1])
+        elif time_str[-1] in ("h", "H"):
+            return int(time_str[:-1]) * 60
+        elif time_str[-1] in ("s", "S"):
+            return max(1, int(time_str[:-1]) // 60)  # Convert seconds to minutes, min 1
+
+        # Handle days-HH:MM:SS format (1-02:30:00)
+        if "-" in time_str:
+            parts = time_str.split("-")
+            days = int(parts[0])
+            time_part = parts[1]
+        else:
+            days = 0
+            time_part = time_str
+
+        # Handle HH:MM:SS or MM:SS or just minutes
+        time_parts = time_part.split(":")
+        if len(time_parts) == 3:  # HH:MM:SS
+            hours, mins, secs = map(int, time_parts)
+            total_mins = days * 24 * 60 + hours * 60 + mins + (secs // 60)
+        elif len(time_parts) == 2:  # MM:SS
+            mins, secs = map(int, time_parts)
+            total_mins = days * 24 * 60 + mins + (secs // 60)
+        else:  # Just minutes
+            total_mins = days * 24 * 60 + int(time_part)
+
+        return total_mins
+
     async def submit_job(self, params: JobSubmitParams) -> JobSubmitResult:
         """Submit a job to Slurm via REST API"""
         try:
@@ -142,7 +192,9 @@ class SlurmAdapter(BackendAdapter):
             if params.memory:
                 job_spec["memory_per_node"] = params.memory
             if params.time_limit:
-                job_spec["time_limit"] = params.time_limit
+                # Convert time_limit string to minutes (Slurm v0.0.40 expects object with number field)
+                time_minutes = self._parse_time_limit(params.time_limit)
+                job_spec["time_limit"] = {"number": time_minutes}
             if params.partition:
                 job_spec["partition"] = params.partition
             if params.output_path:
@@ -237,9 +289,25 @@ class SlurmAdapter(BackendAdapter):
         state: Optional[str] = None,
         limit: int = 100,
     ) -> List[JobDetails]:
-        """List jobs from Slurm"""
-        # Note: Slurm REST API filtering is limited, we filter client-side
-        response = await self._make_request("GET", "/slurm/v0.0.40/jobs")
+        """List jobs from Slurm with server-side filtering"""
+        # Use server-side filtering via query parameters for efficiency
+        params = {}
+        if user:
+            params["user_name"] = user
+        if state:
+            # Map unified state to Slurm state if needed
+            slurm_state_map = {
+                "PENDING": "PENDING",
+                "RUNNING": "RUNNING",
+                "COMPLETED": "COMPLETED",
+                "FAILED": "FAILED",
+                "CANCELLED": "CANCELLED",
+                "TIMEOUT": "TIMEOUT",
+            }
+            slurm_state = slurm_state_map.get(state, state)
+            params["state"] = slurm_state
+
+        response = await self._make_request("GET", "/slurm/v0.0.40/jobs", params=params)
 
         jobs = response.get("jobs", [])
         result = []
@@ -250,17 +318,11 @@ class SlurmAdapter(BackendAdapter):
                 if not job_id:
                     continue
 
-                # Apply filters
-                if user and job_data.get("user_name") != user:
-                    continue
-
                 job_state = self._normalize_state(
                     job_data.get("job_state", ["UNKNOWN"])[0]
                     if isinstance(job_data.get("job_state"), list)
                     else job_data.get("job_state", "UNKNOWN")
                 )
-                if state and job_state != state:
-                    continue
 
                 # Create minimal JobDetails (concise format)
                 submitted_ts = job_data.get("submit_time", {})
