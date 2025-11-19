@@ -1,10 +1,13 @@
-# HPC Scheduler MCP Server
+# Unified HPC MCP Server
 
-Model Context Protocol server providing AI agents with natural language access to HPC batch schedulers (Slurm and Flux). This server enables conversational interaction with high-performance computing clusters, dramatically reducing time-to-science.
+Single Model Context Protocol (MCP) server that brokers both Slurm REST (`slurmrestd`) and Flux Operator MiniClusters. The runtime and client scaffolding follow the [rdwj/mcp-server-template](https://github.com/rdwj/mcp-server-template) and [rdwj/mcp-client-template](https://github.com/rdwj/mcp-client-template), while Flux MiniCluster specs are validated against the upstream [Flux Operator CRD](https://flux-framework.org/flux-operator/getting_started/custom-resource-definition.html#v1alpha1).
 
-## Overview
+## Security-first Overview
 
-This MCP server connects AI agents (like LibreChat) to your existing HPC infrastructure, providing:
+- One hardened container image (`hpc-mcp-server`) with FastMCP HTTP transport.
+- Flux MiniCluster CRUD enforces namespace allow-lists, spec validation, and readiness waits without leaking pod details.
+- Slurm interactions remain REST-only; Kubernetes RBAC is scoped to `miniclusters` + read-only Pods.
+- Network traffic stays on port `5000` with `/health` for probes.
 
 - **Unified Interface:** Single server supporting both Slurm and Flux schedulers
 - **Natural Language:** Submit jobs, monitor status, debug failures through conversation
@@ -21,11 +24,8 @@ This MCP server connects AI agents (like LibreChat) to your existing HPC infrast
 
 ### Deploy to OpenShift
 
-```bash
-cd hpc-scheduler
-
-# Deploy the MCP server
-make deploy PROJECT=hpc-mcp
+- Podman or Docker, Python 3.12+, `kind`, `kubectl`, `jq` (for the test script).
+- A running demo cluster from `../bootstrap/setup_local_cluster.sh` (deploys Slurm + Flux operators).
 
 # Verify deployment
 oc get pods -n hpc-mcp
@@ -35,77 +35,43 @@ oc get route -n hpc-mcp
 ### Configure HPC Clusters
 
 ```bash
-# Point to your existing clusters
-oc set env deployment/hpc-scheduler-mcp \
-  SLURM_CLUSTERS="prod:hpc-login.example.edu,dev:hpc-dev.example.edu" \
-  FLUX_CLUSTERS="flux:flux.example.edu" \
-  -n hpc-mcp
+# Build + deploy into kind (uses localhost/hpc-mcp-server:latest by default)
+cd mcp-servers
+./build_and_deploy.sh
 
-# Add SSH credentials (if required)
-oc create secret generic hpc-ssh-keys \
-  --from-file=id_rsa=~/.ssh/hpc_rsa \
-  -n hpc-mcp
+# Verify
+kubectl get pods -n hpc-mcp -l app=hpc-mcp-server
+kubectl get svc -n hpc-mcp hpc-mcp-server
 
-oc set volume deployment/hpc-scheduler-mcp \
-  --add --type=secret --secret-name=hpc-ssh-keys \
-  --mount-path=/app/.ssh \
-  -n hpc-mcp
-```
-
-### Get MCP Server URL
-
-```bash
-oc get route hpc-scheduler-mcp -n hpc-mcp -o jsonpath='{.spec.host}'
+# Smoke test
+./tests/integration_test.sh
 ```
 
 MCP endpoint: `https://<route-host>/mcp/`
 
 ## Integration with LibreChat
 
-### Install LibreChat
-
-Follow the installation guide at: https://www.librechat.ai/docs/local
-
-Choose your deployment method:
-- **Docker/Podman** - Quick setup
-- **OpenShift** - Production deployment
-- **Local** - Development
-
-### Configure LibreChat
-
-Edit `librechat.yaml`:
-
-```yaml
-endpoints:
-  mcp:
-    servers:
-      - name: "hpc-scheduler"
-        url: "https://<your-mcp-route-host>/mcp/"
-        transport: "http"
-        description: "HPC Job Scheduling (Slurm & Flux)"
-```
-
-Restart LibreChat:
 ```bash
-docker-compose restart  # or npm run restart
+kubectl port-forward -n hpc-mcp svc/hpc-mcp-server 5000:5000
 ```
 
-### Create HPC Assistant Agent
+- MCP endpoint: `http://localhost:5000/messages`
+- Health: `http://localhost:5000/health`
 
-1. Log into LibreChat
-2. Navigate to "Agents" → "Create New Agent"
-3. **Name:** `HPC Job Management Assistant`
-4. **System Prompt:** Copy contents from `hpc-scheduler/agent/system_prompt.md`
-5. **Connected MCP Servers:** Select `hpc-scheduler`
-6. Save
+## Tools (10 total)
 
-## Available Tools
-
-The MCP server exposes 15+ tools for comprehensive HPC management:
-
-### Cluster Discovery
-- `list_clusters` - Enumerate available clusters and schedulers
-- `get_cluster_info` - Detailed cluster configuration
+| Scheduler | Tool | Purpose |
+|-----------|------|---------|
+| Slurm | `slurm_submit_job` | Secure script-based submission |
+| Slurm | `slurm_get_job` | Describe a job |
+| Slurm | `slurm_list_jobs` | Filter by state/user |
+| Slurm | `slurm_cancel_job` | Cancel pending/running job |
+| Slurm | `slurm_queue_summary` | Summarize queue state |
+| Flux | `flux_list_miniclusters` | Enumerate MiniClusters in allowed namespaces |
+| Flux | `flux_get_minicluster` | Fetch CR + status |
+| Flux | `flux_apply_minicluster` | Create/update MiniCluster specs with validation |
+| Flux | `flux_scale_minicluster` | Patch size/maxSize |
+| Flux | `flux_delete_minicluster` | Secure deletion |
 
 ### Job Management
 - `submit_job` - Submit jobs with validation
@@ -114,126 +80,50 @@ The MCP server exposes 15+ tools for comprehensive HPC management:
 - `get_job_details` - Detailed job information
 - `cancel_job` - Terminate jobs
 
-### Monitoring & Analysis
-- `get_job_output` - Retrieve stdout/stderr logs
-- `get_queue_info` - Partition status and availability
-- `analyze_job_history` - Historical performance analysis
-
-### Resource Intelligence
-- `validate_job_script` - Pre-submission validation
-- `analyze_resource_requirements` - Workload-based recommendations
-- `get_resource_usage` - Resource consumption metrics
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_HOST` | `0.0.0.0` | Listener host |
+| `MCP_PORT` | `5000` | Listener port |
+| `MCP_TRANSPORT` | `http` | Transport type |
+| `SLURM_REST_URL` | `http://slurm-restapi.slurm.svc.cluster.local:6820` | slurmrestd endpoint |
+| `SLURM_NAMESPACE` | `slurm` | Namespace for token generation |
+| `SLURM_USER` | `slurm` | REST identity |
+| `FLUX_NAMESPACE` | `flux-operator` | Default MiniCluster namespace |
+| `FLUX_MINICLUSTER` | `flux-sample` | Default MiniCluster name |
+| `ALLOWED_NAMESPACES` | *(empty)* | Comma-separated allow-list for Flux namespaces |
 
 ## Example Interactions
 
+Example Cursor/Claude MCP snippet:
+
+```json
+{
+  "mcpServers": {
+    "hpc-mcp": {
+      "url": "http://localhost:5000/messages",
+      "transport": "sse"
+    }
+  }
+}
 ```
-User: "What clusters are available?"
-Agent: [Lists Slurm and Flux clusters with current status]
 
-User: "Submit a job to run my simulation on 8 nodes with 4 GPUs each"
-Agent: [Validates requirements, creates job script, submits, returns job ID]
+You can scaffold custom clients using [rdwj/mcp-client-template](https://github.com/rdwj/mcp-client-template) to exercise the same tool surface securely.
 
-User: "Why did job 12345 fail?"
-Agent: [Analyzes logs, identifies issue, suggests solution]
+## Integration Test
 
-User: "Show efficiency of my jobs this week"
-Agent: [Retrieves historical data, calculates metrics, recommends optimizations]
-```
-
-## Architecture
-
-```
-┌─────────────────┐
-│   LibreChat     │  ← Conversational Interface
-│   (AI Agent)    │
-└────────┬────────┘
-         │ MCP Protocol (HTTP)
-         │
-┌────────▼────────────────────────┐
-│  HPC Scheduler MCP Server       │
-│  (OpenShift Deployment)         │
-│                                 │
-│  ┌─────────────────────────┐   │
-│  │  Unified Tool Interface │   │
-│  └───────┬─────────────────┘   │
-│          │                      │
-│  ┌───────▼──────┐  ┌──────────┐│
-│  │Slurm Adapter │  │Flux      ││
-│  │              │  │Adapter   ││
-│  └──────────────┘  └──────────┘│
-└─────────┬───────────┬───────────┘
-          │           │
-          │ SSH/CLI   │ SSH/CLI
-          │           │
-┌─────────▼───────────▼───────────┐
-│   Your HPC Clusters             │
-│   (Existing Infrastructure)     │
-└─────────────────────────────────┘
-```
+`tests/integration_test.sh` port-forwards the service, checks `/health`, and calls `tools/list`. Requires `jq` and an accessible cluster.
 
 ## Development
 
-### Local Testing
-
 ```bash
-cd hpc-scheduler
+# Build
+./build.sh --registry localhost --tag latest
 
-# Install dependencies
-make install
+# Load into kind manually
+podman save localhost/hpc-mcp-server:latest | kind load image-archive /dev/stdin --name hpc-local
 
-# Run in STDIO mode
-make run-local
-
-# Test with cmcp
-make test-local
-
-# Run tests
-make test
-```
-
-### Working with Code
-
-See `hpc-scheduler/` directory for:
-- `README.md` - Detailed documentation
-- `ARCHITECTURE.md` - System design
-- `TESTING.md` - Testing strategies
-- `docs/TOOLS_GUIDE.md` - Creating tools
-- `agent/system_prompt.md` - Agent behavior definition
-
-## Troubleshooting
-
-### MCP Server Not Connecting to Clusters
-
-```bash
-# Check connectivity from pod
-oc rsh deployment/hpc-scheduler-mcp -n hpc-mcp
-ssh -i /app/.ssh/id_rsa user@hpc-login.example.edu "squeue --version"
-```
-
-Common issues:
-- SSH keys not mounted (check volume mounts)
-- Firewall blocking connection
-- Incorrect hostname/username
-- SSH host key verification
-
-### Agent Not Seeing Tools
-
-1. Verify MCP server running: `oc get pods -n hpc-mcp`
-2. Check route accessible: `curl https://<route>/mcp/health`
-3. Verify LibreChat config has correct URL
-4. Restart LibreChat
-5. Check logs: `oc logs -f deployment/hpc-scheduler-mcp -n hpc-mcp`
-
-## Testing Infrastructure (Optional)
-
-For development without production HPC access:
-
-```bash
-# Deploy test Slurm minicluster
-oc apply -f hpc-scheduler/manifests/slurm-minimal.yaml -n hpc-mcp
-
-# Deploy test Flux minicluster
-oc apply -f hpc-scheduler/manifests/flux-minicluster.yaml -n hpc-mcp
+# Push to custom registry
+./push.sh --registry quay.io/myorg --tag v1.0.0
 ```
 
 These are minimal deployments for testing MCP functionality, not production HPC.
@@ -245,32 +135,7 @@ These are minimal deployments for testing MCP functionality, not production HPC.
 - Get AI-assisted debugging of failures
 - Optimize resource allocation automatically
 
-### For HPC Administrators
-- Reduce support tickets through self-service AI assistance
-- Improve cluster efficiency with intelligent resource recommendations
-- Lower barrier to entry for new users
-
-### For Institutions
-- Faster time-to-science
-- Better ROI on HPC investments
-- Competitive advantage through modern AI-assisted workflows
-
-## Contributing
-
-Contributions welcome! Areas of interest:
-- Additional scheduler support (PBS, LSF, Grid Engine)
-- Enhanced analytics and optimization
-- Integration with other AI platforms
-- Documentation and tutorials
-
-## References
-
-- **MCP Protocol:** https://modelcontextprotocol.io
-- **FastMCP Framework:** https://github.com/jlowin/fastmcp
-- **LibreChat:** https://www.librechat.ai
-- **Slurm:** https://slurm.schedmd.com
-- **Flux:** https://flux-framework.org
-
-## License
-
-MIT License - See LICENSE file for details.
+- **Pod pending**: `kubectl describe pod -n hpc-mcp -l app=hpc-mcp-server`
+- **Flux RBAC**: ensure ServiceAccount `hpc-mcp-sa` has verbs on `flux-framework.org/miniclusters`.
+- **Slurm token errors**: `kubectl logs slurm-controller-0 -n slurm -c slurmctld | grep token`
+- **Custom namespaces**: set `ALLOWED_NAMESPACES=flux-operator,flux-research` to allow multi-tenancy.

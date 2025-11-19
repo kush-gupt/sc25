@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpc-mcp-server
+  namespace: hpc-mcp
+  labels:
+    app: hpc-mcp-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hpc-mcp-server
+  template:
+    metadata:
+      labels:
+        app: hpc-mcp-server
+    spec:
+      serviceAccountName: hpc-mcp-sa
+      containers:
+        - name: hpc-mcp-server
+          image: ghcr.io/kush-gupt/hpc-mcp-server:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5000
+              name: mcp
+          env:
+            - name: MCP_HOST
+              value: "0.0.0.0"
+            - name: MCP_PORT
+              value: "5000"
+            - name: MCP_TRANSPORT
+              value: "http"
+            - name: SLURM_REST_URL
+              value: "http://slurm-restapi.slurm.svc.cluster.local:6820"
+            - name: SLURM_NAMESPACE
+              value: "slurm"
+            - name: SLURM_USER
+              value: "slurm"
+            - name: FLUX_NAMESPACE
+              value: "flux-operator"
+            - name: FLUX_MINICLUSTER
+              value: "flux-sample"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
