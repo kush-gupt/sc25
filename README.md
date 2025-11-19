@@ -1,8 +1,6 @@
-# HPC Containerization with AI Integration
+# MCP and Agent for HPC Job Handling
 
 Kubernetes-native HPC platform combining traditional (Slurm) and modern (Flux) batch schedulers with a unified Model Context Protocol (MCP) server.
-
-Assisted by: Cursor IDE
 
 ## Features
 
@@ -25,7 +23,7 @@ cd mcp-servers
 ./tests/integration_test.sh
 ```
 
-### GitOps (ArgoCD)
+**GitOps (ArgoCD):**
 
 ```bash
 ./bootstrap/setup_local_cluster.sh
@@ -60,6 +58,7 @@ MIT License - see [LICENSE](LICENSE)
 ## References & Acknowledgments
 
 This project leverages several AMAZING open-source technologies:
+
 - [Podman](https://docs.podman.io/)
 - [Slurm Workload Manager](https://www.schedmd.com/slurm.html) - Traditional HPC scheduler
 - [Flux Framework](https://flux-framework.org/) - Next-generation HPC scheduler
@@ -68,5 +67,3 @@ This project leverages several AMAZING open-source technologies:
 - [Model Context Protocol](https://modelcontextprotocol.io/) - LLM integration standard
 - [ArgoCD](https://argo-cd.readthedocs.io/) - GitOps continuous delivery
 - [kind](https://kind.sigs.k8s.io/) - Kubernetes in Docker
-
-

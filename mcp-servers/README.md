@@ -9,12 +9,30 @@ Single Model Context Protocol (MCP) server that brokers both Slurm REST (`slurmr
 - Slurm interactions remain REST-only; Kubernetes RBAC is scoped to `miniclusters` + read-only Pods.
 - Network traffic stays on port `5000` with `/health` for probes.
 
-## Prerequisites
+- **Unified Interface:** Single server supporting both Slurm and Flux schedulers
+- **Natural Language:** Submit jobs, monitor status, debug failures through conversation
+- **Resource Intelligence:** AI-powered recommendations for optimal resource allocation
+- **Production Ready:** OpenShift deployment with SSH-based cluster connectivity
+
+## Quick Start
+
+### Prerequisites
+
+- Existing HPC cluster(s) running Slurm and/or Flux
+- OpenShift cluster access with `oc` CLI configured
+- Network connectivity from OpenShift to your HPC clusters
+
+### Deploy to OpenShift
 
 - Podman or Docker, Python 3.12+, `kind`, `kubectl`, `jq` (for the test script).
 - A running demo cluster from `../bootstrap/setup_local_cluster.sh` (deploys Slurm + Flux operators).
 
-## Quick Start
+# Verify deployment
+oc get pods -n hpc-mcp
+oc get route -n hpc-mcp
+```
+
+### Configure HPC Clusters
 
 ```bash
 # Build + deploy into kind (uses localhost/hpc-mcp-server:latest by default)
@@ -29,7 +47,9 @@ kubectl get svc -n hpc-mcp hpc-mcp-server
 ./tests/integration_test.sh
 ```
 
-## Access
+MCP endpoint: `https://<route-host>/mcp/`
+
+## Integration with LibreChat
 
 ```bash
 kubectl port-forward -n hpc-mcp svc/hpc-mcp-server 5000:5000
@@ -53,7 +73,12 @@ kubectl port-forward -n hpc-mcp svc/hpc-mcp-server 5000:5000
 | Flux | `flux_scale_minicluster` | Patch size/maxSize |
 | Flux | `flux_delete_minicluster` | Secure deletion |
 
-## Configuration
+### Job Management
+- `submit_job` - Submit jobs with validation
+- `submit_job_and_wait` - Submit and block until completion
+- `list_jobs` - Query job status with filtering
+- `get_job_details` - Detailed job information
+- `cancel_job` - Terminate jobs
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -67,7 +92,7 @@ kubectl port-forward -n hpc-mcp svc/hpc-mcp-server 5000:5000
 | `FLUX_MINICLUSTER` | `flux-sample` | Default MiniCluster name |
 | `ALLOWED_NAMESPACES` | *(empty)* | Comma-separated allow-list for Flux namespaces |
 
-## Client Configuration
+## Example Interactions
 
 Example Cursor/Claude MCP snippet:
 
@@ -101,7 +126,14 @@ podman save localhost/hpc-mcp-server:latest | kind load image-archive /dev/stdin
 ./push.sh --registry quay.io/myorg --tag v1.0.0
 ```
 
-## Troubleshooting
+These are minimal deployments for testing MCP functionality, not production HPC.
+
+## Value Proposition
+
+### For Researchers
+- Submit jobs in natural language without memorizing commands
+- Get AI-assisted debugging of failures
+- Optimize resource allocation automatically
 
 - **Pod pending**: `kubectl describe pod -n hpc-mcp -l app=hpc-mcp-server`
 - **Flux RBAC**: ensure ServiceAccount `hpc-mcp-sa` has verbs on `flux-framework.org/miniclusters`.

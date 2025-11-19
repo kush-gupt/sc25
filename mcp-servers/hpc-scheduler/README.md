@@ -1,533 +1,410 @@
-# FastMCP Server Template
+# HPC Scheduler MCP Server
 
-A production-ready MCP (Model Context Protocol) server template with dynamic tool/resource loading, Python decorator-based prompts, and seamless OpenShift deployment.
+An MCP (Model Context Protocol) server that provides AI agents with natural language access to HPC batch schedulers (Slurm and Flux). This project demonstrates how conversational AI can dramatically reduce time-to-science by making HPC cluster management more intuitive and accessible.
 
-## Features
+## The Problem
 
-- 🔧 **Dynamic tool/resource loading** via decorators
-- 📁 **Resource subdirectories** for organizing related resources
-- 📝 **Python-based prompts** with type safety and FastMCP decorators
-- 🔀 **Middleware support** for cross-cutting concerns
-- 🏗️ **Generator system** for scaffolding new components with non-interactive CLI
-- 🔄 **Selective updates** - patch infrastructure without losing custom code
-- 🚀 **One-command OpenShift deployment**
-- 🔥 **Hot-reload** for local development
-- 🧪 **Local STDIO** and **OpenShift HTTP** transports
-- 🔐 **JWT authentication** (optional) with scope-based authorization
-- ✅ **Full test suite** with pytest
+HPC users spend significant time learning scheduler commands, crafting job scripts, debugging failures, and optimizing resource allocation. The command-line interface, while powerful, has a steep learning curve and requires remembering syntax, flags, and best practices across different scheduler implementations.
+
+## The Solution
+
+This MCP server connects AI agents (like those in LibreChat) directly to your HPC clusters, enabling users to:
+
+- Submit jobs using natural language descriptions
+- Get intelligent resource recommendations based on workload analysis
+- Debug failed jobs with automated log analysis and suggestions
+- Monitor cluster state and queue statistics conversationally
+- Optimize resource allocation based on historical data
+
+**Result:** Researchers and scientists can focus on their computational problems instead of scheduler syntax.
 
 ## Quick Start
 
-### Local Development
+### Prerequisites
+
+- Existing HPC cluster(s) running Slurm and/or Flux
+- OpenShift cluster access with `oc` CLI configured
+- Network connectivity from OpenShift to your HPC clusters
+
+> **Note:** This project includes test manifests for deploying Flux and Slurm miniclusters if you need them for development/testing (see `manifests/` directory), but assumes most users already have production HPC infrastructure.
+
+### Step 1: Deploy the MCP Server
 
 ```bash
-# Install and run locally
-make install
-make run-local
+# Navigate to the MCP server directory
+cd mcp-servers/hpc-scheduler
 
-# Test with cmcp (in another terminal)
-cmcp ".venv/bin/python -m src.main" tools/list
+# Deploy to OpenShift
+make deploy PROJECT=hpc-mcp
+
+# Verify deployment
+oc get pods -n hpc-mcp
+oc get route -n hpc-mcp
 ```
 
-### Deploy to OpenShift
+**Get your MCP server URL:**
+```bash
+oc get route hpc-scheduler-mcp -n hpc-mcp -o jsonpath='{.spec.host}'
+```
+
+Your MCP endpoint: `https://<route-host>/mcp/`
+
+### Step 2: Configure Your HPC Clusters
+
+Point the MCP server to your existing HPC clusters:
 
 ```bash
-# IMPORTANT: Remove examples before first deployment
-./remove_examples.sh
+# Configure Slurm clusters
+oc set env deployment/hpc-scheduler-mcp \
+  SLURM_CLUSTERS="production:hpc-login.example.edu,dev:hpc-dev.example.edu" \
+  -n hpc-mcp
 
-# One-command deployment
-make deploy
-
-# Or deploy to specific project
-make deploy PROJECT=my-project
+# Configure Flux clusters (if applicable)
+oc set env deployment/hpc-scheduler-mcp \
+  FLUX_CLUSTERS="flux-prod:flux.example.edu" \
+  -n hpc-mcp
 ```
 
-> **Note**: Running `./remove_examples.sh` before deployment removes example code and cache files, significantly reducing build context size and preventing deployment timeouts.
-
-## Project Structure
-
-```
-├── src/
-│   ├── core/           # Core server components
-│   ├── tools/          # Tool implementations
-│   ├── resources/      # Resource implementations (supports subdirectories)
-│   │   ├── country_profiles/   # Example: organized by category
-│   │   ├── checklists/
-│   │   └── emergency_protocols/
-│   ├── prompts/        # Python-based prompt definitions
-│   └── middleware/     # Middleware implementations
-├── tests/              # Test suite
-├── .fips-agents-cli/   # Generator templates
-├── .template-info      # Template version tracking (for updates)
-├── Containerfile       # Container definition
-├── openshift.yaml      # OpenShift manifests
-├── deploy.sh           # Deployment script
-├── requirements.txt    # Python dependencies
-└── Makefile           # Common tasks
-```
-
-## Development
-
-### Adding Tools
-
-Create a Python file in `src/tools/`. Tools support rich type annotations, validation, and metadata:
-
-```python
-from typing import Annotated
-from pydantic import Field
-from fastmcp import Context
-from fastmcp.exceptions import ToolError
-from src.core.app import mcp
-
-@mcp.tool(
-    annotations={
-        "readOnlyHint": True,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    }
-)
-async def my_tool(
-    param: Annotated[str, Field(description="Parameter description", min_length=1, max_length=100)],
-    ctx: Context = None,
-) -> str:
-    """Tool description for the LLM."""
-    await ctx.info("Processing request")
-
-    if not param.strip():
-        raise ToolError("Parameter cannot be empty")
-
-    return f"Result: {param}"
-```
-
-**Best Practices:**
-- Use `Annotated` for parameter descriptions (FastMCP 2.11.0+)
-- Add Pydantic `Field` constraints for validation
-- Use tool `annotations` for hints about behavior
-- Always include `ctx: Context = None` for logging and capabilities
-- Raise `ToolError` for user-facing validation errors
-- Use structured output (dataclasses) for complex results
-
-See [TOOLS_GUIDE.md](docs/TOOLS_GUIDE.md) for comprehensive examples and patterns.
-
-**Generator examples:**
-```bash
-# Simple tool
-fips-agents generate tool my_tool \
-    --description "Tool description" \
-    --async
-
-# Tool with context
-fips-agents generate tool search_documents \
-    --description "Search through documents" \
-    --async \
-    --with-context
-
-# Tool with authentication
-fips-agents generate tool protected_operation \
-    --description "Protected operation" \
-    --async \
-    --with-auth
-
-# Tool with parameters from JSON file
-fips-agents generate tool complex_tool \
-    --description "Complex tool with multiple params" \
-    --params params.json \
-    --with-context
-
-# Advanced tool with all options
-fips-agents generate tool advanced_tool \
-    --description "Advanced tool example" \
-    --async \
-    --with-context \
-    --with-auth \
-    --return-type "dict" \
-    --read-only \
-    --idempotent
-```
-
-### Adding Resources
-
-Resources can be organized in subdirectories for better structure. Create files in `src/resources/` or any subdirectory:
-
-**Simple resource:**
-```python
-from src.core.app import mcp
-
-@mcp.resource("resource://my-resource")
-async def get_my_resource() -> str:
-    return "Resource content"
-```
-
-**JSON resource with metadata:**
-```python
-from src.core.app import mcp
-
-@mcp.resource(
-    "data://config",
-    mime_type="application/json",
-    description="Application configuration data"
-)
-async def get_config() -> dict:
-    return {"version": "1.0", "features": ["tools", "resources"]}
-```
-
-**Resource template (parameterized):**
-```python
-from src.core.app import mcp
-
-@mcp.resource("weather://{city}/current")
-async def get_weather(city: str) -> dict:
-    """Weather information for a specific city."""
-    return {"city": city, "temperature": 22, "condition": "Sunny"}
-```
-
-**Organizing resources in subdirectories:**
-```
-src/resources/
-├── country_profiles/
-│   ├── __init__.py
-│   ├── japan.py          # country-profiles://JP
-│   └── france.py         # country-profiles://FR
-├── checklists/
-│   ├── __init__.py
-│   └── travel.py         # travel-checklists://first-trip
-└── emergency_protocols/
-    ├── __init__.py
-    └── passport.py       # emergency-protocols://passport-lost
-```
-
-**Generator examples:**
-```bash
-# Simple resource
-fips-agents generate resource my_resource \
-    --description "My resource description" \
-    --uri "resource://my-resource" \
-    --mime-type "text/plain"
-
-# JSON resource
-fips-agents generate resource config_data \
-    --description "Application configuration" \
-    --uri "data://config" \
-    --mime-type "application/json"
-
-# Resource in subdirectory (creates country_profiles/japan.py)
-fips-agents generate resource country-profiles/japan \
-    --description "Japan country profile" \
-    --uri "country-profiles://JP" \
-    --mime-type "application/json"
-
-# Resource template with async and context
-fips-agents generate resource weather \
-    --async \
-    --with-context \
-    --description "Weather data by city" \
-    --uri "weather://{city}/current" \
-    --mime-type "application/json"
-```
-
-Subdirectories are automatically discovered by the loader - no manual registration needed!
-
-### Creating Prompts
-
-Create Python files in `src/prompts/`. Prompts support multiple return types, async operations, context access, and metadata:
-
-**Basic String Prompt:**
-```python
-from pydantic import Field
-from src.core.app import mcp
-
-@mcp.prompt
-def my_prompt(
-    query: str = Field(description="User query"),
-) -> str:
-    """Purpose of this prompt"""
-    return f"Please answer: {query}"
-```
-
-**Async Prompt with Context:**
-```python
-from pydantic import Field
-from fastmcp import Context
-from src.core.app import mcp
-
-@mcp.prompt
-async def fetch_prompt(
-    url: str = Field(description="Data source URL"),
-    ctx: Context,
-) -> str:
-    """Fetch data and create prompt"""
-    # Perform async operations
-    return f"Analyze data from {url}"
-```
-
-**Structured Message Prompt:**
-```python
-from pydantic import Field
-from fastmcp.prompts.prompt import PromptMessage, TextContent
-from src.core.app import mcp
-
-@mcp.prompt
-def structured_prompt(
-    task: str = Field(description="Task description"),
-) -> PromptMessage:
-    """Create structured message"""
-    return PromptMessage(
-        role="user",
-        content=TextContent(type="text", text=f"Task: {task}")
-    )
-```
-
-**Advanced with Metadata:**
-```python
-from pydantic import Field
-from src.core.app import mcp
-
-@mcp.prompt(
-    name="custom_name",
-    title="Human Readable Title",
-    description="Custom description",
-    tags={"analysis", "reporting"},
-    meta={"version": "1.0", "author": "team"}
-)
-def advanced_prompt(
-    data: dict[str, str] = Field(description="Data to process"),
-) -> str:
-    """Advanced prompt with full metadata"""
-    return f"Analyze: {data}"
-```
-
-**Generator Examples:**
-```bash
-# Basic prompt
-fips-agents generate prompt summarize_text \
-    --description "Summarize text content"
-
-# Async with Context
-fips-agents generate prompt fetch_and_analyze \
-    --async --with-context \
-    --return-type PromptMessage
-
-# With parameters file
-fips-agents generate prompt analyze_data \
-    --params params.json --with-schema
-
-# Advanced with metadata
-fips-agents generate prompt report_generator \
-    --async --with-context \
-    --prompt-name "generate_report" \
-    --title "Report Generator" \
-    --tags "reporting,analysis" \
-    --meta '{"version": "2.0"}'
-```
-
-**Return Types:**
-- `str` - Simple string prompt (default)
-- `PromptMessage` - Structured message with role
-- `list[PromptMessage]` - Multi-turn conversation
-- `PromptResult` - Full prompt result object
-
-See [CLAUDE.md](CLAUDE.md) for comprehensive prompt generation documentation and `src/prompts/` for working examples.
-
-### Adding Middleware
-
-Create a file in `src/middleware/`:
-
-```python
-from typing import Any, Callable
-from fastmcp import Context
-from core.app import mcp
-
-@mcp.middleware()
-async def my_middleware(
-    ctx: Context,
-    next_handler: Callable,
-    *args: Any,
-    **kwargs: Any
-) -> Any:
-    # Pre-execution logic
-    result = await next_handler(*args, **kwargs)
-    # Post-execution logic
-    return result
-```
-
-Middleware wraps tool execution to add cross-cutting concerns like logging, authentication, rate limiting, caching, etc.
-
-See `src/middleware/logging_middleware.py` for a working example and `src/middleware/auth_middleware.py` for a commented authentication pattern.
-
-**Generator examples:**
-```bash
-# Async middleware
-fips-agents generate middleware logging_middleware \
-    --description "Request logging middleware" \
-    --async
-
-# Sync middleware
-fips-agents generate middleware rate_limiter \
-    --description "Rate limiting middleware" \
-    --sync
-```
-
-## Testing
-
-### Local Testing (STDIO)
+**If your clusters require SSH key authentication:**
 
 ```bash
-# Run server
-make run-local
+# Create secret with your SSH keys
+oc create secret generic hpc-ssh-keys \
+  --from-file=id_rsa=/path/to/private/key \
+  --from-file=id_rsa.pub=/path/to/public/key \
+  -n hpc-mcp
 
-# Test with cmcp
-make test-local
-
-# Run unit tests
-make test
+# Mount the secret
+oc set volume deployment/hpc-scheduler-mcp \
+  --add --type=secret --secret-name=hpc-ssh-keys \
+  --mount-path=/app/.ssh \
+  -n hpc-mcp
 ```
 
-### OpenShift Testing (HTTP)
+### Step 3: Set Up LibreChat
 
+LibreChat provides the conversational interface. Follow the installation guide:
+
+**https://www.librechat.ai/docs/local**
+
+Choose the installation method that fits your environment:
+- **Docker/Podman** - Quick setup for evaluation
+- **OpenShift** - Production deployment alongside the MCP server
+- **Local** - Development and testing
+
+### Step 4: Connect LibreChat to Your MCP Server
+
+Edit your `librechat.yaml`:
+
+```yaml
+# librechat.yaml
+endpoints:
+  mcp:
+    servers:
+      - name: "hpc-scheduler"
+        url: "https://<your-mcp-route-host>/mcp/"
+        transport: "http"
+        description: "HPC Job Scheduling (Slurm & Flux)"
+```
+
+Restart LibreChat:
 ```bash
-# Deploy
-make deploy
+# Docker/Podman deployment
+docker-compose restart
 
-# Test with MCP Inspector
-npx @modelcontextprotocol/inspector https://<route-url>/mcp/
+# Local installation
+npm run restart
 ```
 
-See [TESTING.md](TESTING.md) for detailed testing instructions.
+### Step 5: Create the HPC Assistant Agent
 
-## Keeping Projects Updated
+1. **Log into LibreChat** web interface
 
-This template is actively maintained with improvements to infrastructure, generators, and documentation. You can selectively update your project from template changes without losing your custom code.
+2. **Create a new Agent:**
+   - Navigate to "Agents" → "Create New Agent"
+   - **Name:** `HPC Job Management Assistant`
+   - **System Prompt:** Copy contents from `agent/system_prompt.md` in this repo
+   - **Connected MCP Servers:** Select `hpc-scheduler`
+   - **Save**
 
-### Check for Updates
+### Step 6: Experience Natural Language HPC
 
-```bash
-# See what's changed since project creation
-fips-agents patch check
+Start a conversation with your new agent:
+
+```
+You: "What clusters are available and what's their current load?"
+Agent: [Analyzes cluster state, shows resources, queue depth, utilization]
+
+You: "I need to run a molecular dynamics simulation on 8 nodes with 4 GPUs each for 48 hours"
+Agent: [Validates requirements, suggests optimal partition, estimates queue time,
+        helps create job script, submits job]
+
+You: "Why did my job 54321 fail?"
+Agent: [Reviews job status, analyzes error logs, checks resource usage,
+        identifies issue (e.g., memory limit exceeded), suggests solution]
+
+You: "Show me my jobs from the last week and their efficiency"
+Agent: [Retrieves historical data, calculates CPU/GPU efficiency,
+        identifies optimization opportunities]
 ```
 
-This shows available updates organized by category (generators, core, docs, build).
+## Value Proposition
 
-### Update Specific Categories
+### For Researchers & Scientists
+- **Reduced Learning Curve:** No need to memorize scheduler commands or script syntax
+- **Faster Debugging:** AI analyzes failures and suggests fixes automatically
+- **Better Resource Utilization:** Get intelligent recommendations based on workload patterns
+- **Time Saved:** Focus on science, not on battling the scheduler
 
-```bash
-# Update generator templates (safe - your code is untouched)
-fips-agents patch generators
+### For HPC Administrators
+- **Better Resource Efficiency:** Users get guidance on right-sizing jobs
+- **Reduced Support Tickets:** AI handles common questions and issues
+- **Improved User Adoption:** Lower barrier to entry for new HPC users
+- **Usage Analytics:** Understand how users interact with the cluster
 
-# Update core infrastructure (shows diffs, asks for approval)
-fips-agents patch core
-
-# Update documentation and examples (safe)
-fips-agents patch docs
-
-# Update build and deployment files (shows diffs, asks for approval)
-fips-agents patch build
-
-# Preview changes without applying (dry run)
-fips-agents patch core --dry-run
-```
-
-### Update Everything
-
-```bash
-# Interactively update all categories
-fips-agents patch all
-
-# Skip confirmation prompts (use with caution)
-fips-agents patch all --skip-confirmation
-```
-
-### What Gets Updated
-
-**Automatically updated (no confirmation):**
-- `.fips-agents-cli/generators/` - Code generator templates
-- `docs/` - Documentation files
-- Example files in `src/*/examples/`
-
-**Asks before updating (shows diffs):**
-- `src/core/loaders.py` - Component discovery system
-- `src/core/server.py` - Server bootstrap code
-- `src/*/__ init__.py` - Package initialization files
-- `Makefile`, `Containerfile`, `openshift.yaml` - Build files
-
-**Never updated (your code is protected):**
-- `src/tools/*.py` - Your tool implementations
-- `src/resources/*.py` - Your resource implementations
-- `src/prompts/*.py` - Your prompt definitions
-- `src/middleware/*.py` - Your middleware implementations
-- `tests/` - Your test files
-- `README.md`, `pyproject.toml`, `.env` - Project configuration
-- `src/core/app.py`, `src/core/auth.py`, `src/core/logging.py` - User-customizable core files
-
-### Example: Adding New Template Capabilities
-
-Imagine the template adds new authentication capabilities in a future update:
-
-```bash
-# Check what's new
-fips-agents patch check
-
-# Pull in updated generators so you can generate auth-enabled tools
-fips-agents patch generators
-
-# Review and apply core infrastructure updates
-fips-agents patch core  # Shows diffs, you decide what to apply
-
-# Your existing tools, resources, and prompts remain untouched!
-```
-
-The `.template-info` file tracks which template version your project was created from, enabling smart updates.
-
-## Environment Variables
-
-### Local Development
-- `MCP_TRANSPORT=stdio` - Use STDIO transport
-- `MCP_HOT_RELOAD=1` - Enable hot-reload
-
-### OpenShift Deployment
-- `MCP_TRANSPORT=http` - Use HTTP transport (set automatically)
-- `MCP_HTTP_HOST=0.0.0.0` - HTTP server host
-- `MCP_HTTP_PORT=8080` - HTTP server port
-- `MCP_HTTP_PATH=/mcp/` - HTTP endpoint path
-
-### Optional Authentication
-- `MCP_AUTH_JWT_SECRET` - JWT secret for symmetric signing
-- `MCP_AUTH_JWT_PUBLIC_KEY` - JWT public key for asymmetric
-- `MCP_REQUIRED_SCOPES` - Comma-separated required scopes
-
-## Available Commands
-
-```bash
-make help         # Show all available commands
-make install      # Install dependencies
-make run-local    # Run locally with STDIO
-make test         # Run test suite
-make deploy       # Deploy to OpenShift
-make clean        # Clean up OpenShift deployment
-```
+### For Institutions
+- **Faster Time-to-Science:** Researchers spend less time on infrastructure, more on research
+- **Broader HPC Access:** Makes HPC accessible to users without deep technical expertise
+- **Competitive Advantage:** Differentiate your facility with modern AI-assisted workflows
+- **ROI Improvement:** Better cluster utilization and reduced wasted compute cycles
 
 ## Architecture
 
-The server uses FastMCP 2.x with:
-- Dynamic component loading at startup
-- Hot-reload in development mode
-- Python decorator-based prompts with type safety
-- Automatic component registration via decorators (`@mcp.tool()`, `@mcp.resource()`, `@mcp.prompt()`, `@mcp.middleware()`)
-- Middleware for cross-cutting concerns
-- Generator system with Jinja2 templates for scaffolding
-- Support for both STDIO (local) and HTTP (OpenShift) transports
+### Components
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed architecture information and [GENERATOR_PLAN.md](GENERATOR_PLAN.md) for generator system documentation.
+```
+┌─────────────────┐
+│   LibreChat     │  ← Conversational Interface
+│   (AI Agent)    │
+└────────┬────────┘
+         │ MCP Protocol (HTTP)
+         │
+┌────────▼────────────────────────┐
+│  HPC Scheduler MCP Server       │
+│  (OpenShift Deployment)         │
+│                                 │
+│  ┌─────────────────────────┐   │
+│  │  Unified Tool Interface │   │
+│  └───────┬─────────────────┘   │
+│          │                      │
+│  ┌───────▼──────┐  ┌──────────┐│
+│  │Slurm Adapter │  │Flux      ││
+│  │              │  │Adapter   ││
+│  └──────────────┘  └──────────┘│
+└─────────┬───────────┬───────────┘
+          │           │
+          │ SSH/CLI   │ SSH/CLI
+          │           │
+┌─────────▼───────────▼───────────┐
+│   Your HPC Clusters             │
+│   (Existing Infrastructure)     │
+└─────────────────────────────────┘
+```
 
-## Requirements
+### MCP Tools Available to Agents
 
-- Python 3.11+
-- OpenShift CLI (`oc`) for deployment
-- cmcp for local testing: `pip install cmcp`
+The server exposes 15+ tools for comprehensive HPC management:
+
+**Cluster Discovery:**
+- `list_clusters` - Enumerate available clusters and their schedulers
+- `get_cluster_info` - Detailed cluster configuration and capabilities
+
+**Job Submission & Management:**
+- `submit_job` - Submit jobs with validation and optimization hints
+- `submit_job_and_wait` - Submit and block until completion (for quick jobs)
+- `list_jobs` - Query job status with filtering
+- `get_job_details` - Detailed job information
+- `cancel_job` - Terminate running or pending jobs
+
+**Monitoring & Analysis:**
+- `get_job_output` - Retrieve stdout/stderr logs
+- `get_queue_info` - Partition status and availability
+- `analyze_job_history` - Historical performance analysis
+
+**Resource Intelligence:**
+- `validate_job_script` - Pre-submission script checking
+- `analyze_resource_requirements` - Workload-based recommendations
+- `get_resource_usage` - Real-time and historical resource consumption
+
+See `src/tools/` for implementation details.
+
+## Configuration
+
+### Cluster Connection
+
+The MCP server connects to your HPC clusters via SSH. Configure using environment variables:
+
+```bash
+# Slurm clusters (comma-separated: name:hostname pairs)
+SLURM_CLUSTERS="prod:login.hpc.edu,dev:dev-login.hpc.edu"
+
+# Flux clusters
+FLUX_CLUSTERS="flux:flux.hpc.edu"
+
+# SSH configuration
+SSH_USER="your-username"
+SSH_KEY_PATH="/app/.ssh/id_rsa"
+```
+
+**Multiple Cluster Support:**
+Users can specify which cluster to use when submitting jobs. The agent intelligently selects clusters based on availability and workload requirements.
+
+### Authentication Options
+
+**SSH Keys (Recommended):**
+```bash
+oc create secret generic hpc-ssh-keys \
+  --from-file=id_rsa=~/.ssh/hpc_rsa \
+  -n hpc-mcp
+
+oc set volume deployment/hpc-scheduler-mcp \
+  --add --type=secret --secret-name=hpc-ssh-keys \
+  --mount-path=/app/.ssh \
+  -n hpc-mcp
+```
+
+**Alternative:** If your clusters support API access, you can modify the adapters to use REST APIs instead of SSH.
+
+## Customizing the Agent
+
+The agent's behavior is defined in `agent/system_prompt.md`. This prompt:
+
+- Defines the agent's role and expertise
+- Establishes communication patterns (concise, proactive, educational)
+- Provides workflow guidance (validation → submission → monitoring)
+- Sets standards for error handling and troubleshooting
+
+**Customization Examples:**
+
+- Add domain-specific guidance (e.g., bioinformatics workflows)
+- Adjust verbosity for different user populations
+- Include site-specific policies or best practices
+- Add specialized analysis for certain job types
+
+After modifying the prompt, update it in your LibreChat agent configuration.
+
+## Development & Testing
+
+### Local Testing (Without OpenShift)
+
+```bash
+# Install dependencies
+make install
+
+# Run in STDIO mode for local testing
+make run-local
+
+# Test with MCP inspector
+cmcp ".venv/bin/python -m src.main" tools/list
+```
+
+### Testing with Real Clusters
+
+1. Configure cluster credentials in `.env` file
+2. Run local server: `make run-local`
+3. Use MCP inspector or cmcp to call tools
+4. Verify connectivity and tool responses
+
+### Unit Tests
+
+```bash
+make test
+```
+
+See `tests/` directory for test examples.
+
+## Troubleshooting
+
+### MCP Server Can't Connect to Clusters
+
+**Check connectivity:**
+```bash
+# Exec into the pod
+oc rsh deployment/hpc-scheduler-mcp -n hpc-mcp
+
+# Test SSH connection
+ssh -i /app/.ssh/id_rsa user@hpc-login.example.edu
+
+# Test scheduler commands
+ssh user@hpc-login.example.edu "squeue --version"
+```
+
+**Common issues:**
+- SSH keys not properly mounted (check volume mounts)
+- Firewall blocking connection (check network policies)
+- Wrong hostname or username in configuration
+- SSH host key verification (may need to add `StrictHostKeyChecking no` for first connection)
+
+### Agent Not Seeing MCP Tools
+
+1. Check MCP server is running: `oc get pods -n hpc-mcp`
+2. Check route is accessible: `curl https://<route>/mcp/health`
+3. Verify LibreChat configuration has correct URL
+4. Restart LibreChat after configuration changes
+5. Check MCP server logs: `oc logs -f deployment/hpc-scheduler-mcp -n hpc-mcp`
+
+### Jobs Failing to Submit
+
+Check MCP server logs for detailed error messages:
+```bash
+oc logs -f deployment/hpc-scheduler-mcp -n hpc-mcp
+```
+
+Common causes:
+- Invalid job script syntax
+- Resource requirements exceed cluster limits
+- Account/partition permissions issues
+- Cluster scheduler daemon not running
+
+## Testing Infrastructure (Optional)
+
+For development or proof-of-concept without access to production HPC:
+
+The `manifests/` directory contains OpenShift manifests for deploying test Flux and Slurm miniclusters:
+
+```bash
+# Deploy Flux minicluster
+oc apply -f manifests/flux-minicluster.yaml -n hpc-mcp
+
+# Deploy Slurm minicluster
+oc apply -f manifests/slurm-minimal.yaml -n hpc-mcp
+```
+
+These are minimal deployments suitable for testing the MCP server functionality, not for production HPC workloads.
+
+## Roadmap & Future Enhancements
+
+- **Additional Scheduler Support:** PBS Pro, LSF, Grid Engine
+- **Advanced Analytics:** Job cost analysis, carbon footprint estimation
+- **Workflow Templates:** Common job patterns (array jobs, pipelines, dependencies)
+- **Integration with Jupyter:** Submit jobs from notebooks
+- **Multi-site Federation:** Manage jobs across multiple institutions
+- **Resource Prediction:** ML-based queue time and resource estimation
 
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details on how to get started, development setup, and submission guidelines.
+Contributions welcome! Areas of interest:
+
+- Additional scheduler adapters
+- Enhanced job analysis and optimization algorithms
+- Integration with other AI platforms (beyond LibreChat)
+- Documentation and tutorials
+- Testing with diverse HPC configurations
+
+## References
+
+- **MCP Protocol:** https://modelcontextprotocol.io
+- **FastMCP Framework:** https://github.com/jlowin/fastmcp
+- **LibreChat:** https://www.librechat.ai
+- **Slurm Documentation:** https://slurm.schedmd.com
+- **Flux Framework:** https://flux-framework.org
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - See [LICENSE](LICENSE) file for details.
+
+---
+
+**Questions or Issues?**
+
+This is a demonstration project proving the value of MCP-enabled AI agents for HPC. We welcome feedback, questions, and contributions as we explore this new paradigm for human-HPC interaction.
