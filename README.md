@@ -1,8 +1,6 @@
-# HPC Containerization with AI Integration
+# MCP and Agent for HPC Job Handling
 
 Kubernetes-native HPC platform combining traditional (Slurm) and modern (Flux) batch schedulers with Model Context Protocol (MCP) servers for seamless LLM integration. Run HPC workloads with AI-assisted workflows in local development environments.
-
-Assisted by: Cursor IDE
 
 ## Features
 
@@ -25,6 +23,7 @@ Assisted by: Cursor IDE
 ```
 
 **GitOps (ArgoCD):**
+
 ```bash
 ./bootstrap/setup_local_cluster.sh
 cd mcp-servers && ./build.sh
@@ -35,6 +34,7 @@ kubectl port-forward svc/argocd-server -n argocd 8080:443
 ```
 
 **Flux:**
+
 ```bash
 ./bootstrap/demo/demo_flux_jobs.sh
 POD=$(kubectl get pods -n flux-operator -l job-name=flux-sample -o jsonpath='{.items[0].metadata.name}')
@@ -42,12 +42,14 @@ kubectl exec -it $POD -n flux-operator -c flux-sample -- bash -c 'export FLUX_UR
 ```
 
 **Slurm:**
+
 ```bash
 ./bootstrap/demo/demo_slurm_jobs.sh
 kubectl exec -it slurm-controller-0 -n slurm -c slurmctld -- sinfo
 ```
 
 **MCP Servers:**
+
 ```bash
 cd mcp-servers && ./build_and_deploy.sh
 cd ../tests && ./integration_test.sh
@@ -55,7 +57,7 @@ cd ../tests && ./integration_test.sh
 
 ## MCP Servers
 
-20 total tools (10 per scheduler) for LLM integration with Slurm/Flux. Kubernetes native with RBAC. [→ Documentation](mcp-servers/README.md)
+12 tools for LLM integration with Slurm/Flux. Kubernetes native with RBAC. [→ Documentation](mcp-servers/README.md)
 
 ## Registry
 
@@ -79,6 +81,7 @@ MIT License - see [LICENSE](LICENSE)
 ## References & Acknowledgments
 
 This project leverages several AMAZING open-source technologies:
+
 - [Podman](https://docs.podman.io/)
 - [Slurm Workload Manager](https://www.schedmd.com/slurm.html) - Traditional HPC scheduler
 - [Flux Framework](https://flux-framework.org/) - Next-generation HPC scheduler
@@ -87,5 +90,3 @@ This project leverages several AMAZING open-source technologies:
 - [Model Context Protocol](https://modelcontextprotocol.io/) - LLM integration standard
 - [ArgoCD](https://argo-cd.readthedocs.io/) - GitOps continuous delivery
 - [kind](https://kind.sigs.k8s.io/) - Kubernetes in Docker
-
-

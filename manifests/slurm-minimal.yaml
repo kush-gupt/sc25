@@ -1,0 +1,97 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: slurm-auth-key
+  namespace: slurm
+type: Opaque
+stringData:
+  key: "changeme-slurm-auth-key"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: slurm-jwt-key
+  namespace: slurm
+type: Opaque
+stringData:
+  key: "changeme-jwt-hs256-key-needs-to-be-long-enough"
+---
+apiVersion: slinky.slurm.net/v1alpha1
+kind: Controller
+metadata:
+  name: slurm-controller
+  namespace: slurm
+spec:
+  clusterName: hpc-demo
+  slurmKeyRef:
+    name: slurm-auth-key
+    key: key
+  jwtHs256KeyRef:
+    name: slurm-jwt-key
+    key: key
+  persistence:
+    enabled: false
+  template:
+    spec:
+      serviceAccountName: slurm-sa
+      containers:
+      - name: slurmctld
+        image: ghcr.io/slinkyproject/slurm:24.05.4
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+---
+apiVersion: slinky.slurm.net/v1alpha1
+kind: RestApi
+metadata:
+  name: slurm-restapi
+  namespace: slurm
+spec:
+  controllerRef:
+    name: slurm-controller
+    namespace: slurm
+  replicas: 1
+  service:
+    port: 6820
+  template:
+    spec:
+      serviceAccountName: slurm-sa
+      containers:
+      - name: slurmrestd
+        image: ghcr.io/slinkyproject/slurm:24.05.4
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: slinky.slurm.net/v1alpha1
+kind: NodeSet
+metadata:
+  name: compute-nodes
+  namespace: slurm
+spec:
+  controllerRef:
+    name: slurm-controller
+    namespace: slurm
+  replicas: 2
+  template:
+    spec:
+      serviceAccountName: slurm-sa
+      containers:
+      - name: slurmd
+        image: ghcr.io/slinkyproject/slurm:24.05.4
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "1000m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"

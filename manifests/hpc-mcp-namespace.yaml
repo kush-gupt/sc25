@@ -1,0 +1,17 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hpc-mcp
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hpc-mcp-secrets
+  namespace: hpc-mcp
+type: Opaque
+stringData:
+  # This should match the Slurm JWT secret configured in your Slurm cluster
+  # For demo purposes, using a placeholder value
+  # In production, this would come from Slurm's actual JWT key
+  slurm-jwt-secret: "demo-slurm-jwt-secret-changeme"

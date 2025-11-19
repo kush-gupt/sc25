@@ -1,0 +1,28 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: flux-sample
+---
+apiVersion: flux-framework.org/v1alpha2
+kind: MiniCluster
+metadata:
+  name: flux-sample
+  namespace: flux-sample
+spec:
+  size: 4
+  tasks: 1
+
+  # Container with Flux and basic tools
+  containers:
+  - image: ghcr.io/flux-framework/flux-restful-api:latest
+    name: flux
+
+  # Interactive mode for testing
+  interactive: true
+
+  # Flux configuration
+  flux:
+    option: "-ompi=openmpi@5"
+    connectTimeout: "5s"
+    logLevel: 7
